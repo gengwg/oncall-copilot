@@ -1,0 +1,44 @@
+# Alert rules for the demo env. Each maps to a chaos mode in demo-app,
+# so the E2E harness can trigger a specific alert deterministically.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: demo-app-alerts
+  namespace: demo
+  labels: { app: demo-app }
+spec:
+  groups:
+    - name: demo-app
+      interval: 10s
+      rules:
+        - alert: DemoHighErrorRate
+          expr: sum(rate(demo_errors_total[2m])) / sum(rate(demo_requests_total[2m])) > 0.1
+          for: 30s
+          labels: { severity: critical, service: demo-app }
+          annotations:
+            summary: "demo-app error rate above 10%"
+            description: "5xx ratio is {{ $value | humanizePercentage }} over the last 2m. Check demo-app logs for upstream failures."
+
+        - alert: DemoHighLatency
+          expr: demo_latency_mode == 1
+          for: 30s
+          labels: { severity: warning, service: demo-app }
+          annotations:
+            summary: "demo-app latency degradation"
+            description: "Requests are taking >800ms. Investigate slow dependencies or resource contention."
+
+        - alert: DemoMemoryGrowth
+          expr: demo_heap_alloc_bytes > 40000000
+          for: 30s
+          labels: { severity: critical, service: demo-app }
+          annotations:
+            summary: "demo-app heap growing abnormally"
+            description: "Heap is {{ $value | humanize1024 }}B. Possible memory leak."
+
+        - alert: DemoAppDown
+          expr: up{job="demo-app"} == 0
+          for: 30s
+          labels: { severity: critical, service: demo-app }
+          annotations:
+            summary: "demo-app is down"
+            description: "Prometheus cannot scrape demo-app. Check pod status."

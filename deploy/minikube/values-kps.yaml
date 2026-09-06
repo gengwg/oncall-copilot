@@ -1,0 +1,72 @@
+# kube-prometheus-stack values for the on-call copilot demo env.
+# Minimal: Prometheus + Alertmanager + Grafana, no node-exporter/kubelets.
+
+prometheus:
+  prometheusSpec:
+    scrapeInterval: 10s
+    evaluationInterval: 10s
+    retention: 2d
+    ruleSelectorNilUsesHelmValues: false
+    serviceMonitorSelectorNilUsesHelmValues: false
+    additionalScrapeConfigs: []
+
+alertmanager:
+  config:
+    global:
+      resolve_timeout: 1m
+    route:
+      receiver: copilot
+      group_by: ["alertname", "service"]
+      group_wait: 5s
+      group_interval: 30s
+      repeat_interval: 15m
+      routes:
+        - matchers: ['severity = "info"']
+          receiver: "null"
+    receivers:
+      - name: copilot
+        webhook_configs:
+          # alert-relay runs on the host, supervised by the OpenClaw
+          # stream automation. host.minikube.internal resolves from minikube.
+          - url: http://host.minikube.internal:9099/alert
+            send_resolved: true
+            http_config:
+              authorization:
+                type: Bearer
+                credentials_file: /etc/alertmanager/secrets/relay-token/token
+      - name: "null"
+  alertmanagerSpec:
+    # Mounted at /etc/alertmanager/secrets/relay-token/token
+    secrets:
+      - relay-token
+
+grafana:
+  adminPassword: admin
+  persistence:
+    enabled: false
+  additionalDataSources:
+    - name: Loki
+      type: loki
+      url: http://loki.observability.svc:3100
+      access: proxy
+
+nodeExporter:
+  enabled: false
+kubeStateMetrics:
+  enabled: true
+kubelet:
+  enabled: false
+kubeApiServer:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeEtcd:
+  enabled: false
+kubeProxy:
+  enabled: false
+coreDns:
+  enabled: false
+defaultRules:
+  create: false
