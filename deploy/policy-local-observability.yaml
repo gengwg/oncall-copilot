@@ -23,6 +23,14 @@ network_policies:
         rules:
           - allow: { method: GET, path: "/loki/api/v1/**" }
           - allow: { method: GET, path: "/ready" }
+      - host: "172.18.0.1"
+        port: 9099
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow: { method: GET, path: "/healthz" }
+          - allow: { method: GET, path: "/alerts" }
+          - allow: { method: GET, path: "/alerts/**" }
     binaries:
       - { path: /usr/local/bin/curl }
       - { path: /usr/bin/curl }

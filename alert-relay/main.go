@@ -1,6 +1,6 @@
-// alert-relay receives Alertmanager webhook notifications and prints each
-// alert as one JSON line on stdout. OpenClaw's stream automation supervises
-// this process and fires an agent turn per alert batch.
+// alert-relay receives Alertmanager webhook notifications, prints each alert
+// as one JSON line on stdout, and appends it to a queue that consumers drain
+// via GET /alerts. OpenClaw polls /alerts and fires an agent turn per batch.
 package main
 
 import (
@@ -43,18 +43,33 @@ type line struct {
 var (
 	addr  = flag.String("addr", "127.0.0.1:9099", "listen address")
 	token = flag.String("token", "", "bearer token required on POST /alert (empty = no auth)")
-	mu    sync.Mutex // serialize stdout lines
+	mu    sync.Mutex // guards queue + stdout
+	queue []line
 )
 
 func main() {
 	flag.Parse()
 	http.HandleFunc("POST /alert", handleAlert)
+	http.HandleFunc("GET /alerts", handleDrain)
 	http.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 	slog.Info("alert-relay listening", "addr", *addr)
 	if err := http.ListenAndServe(*addr, nil); err != nil {
 		slog.Error("server exited", "err", err)
 		os.Exit(1)
 	}
+}
+
+// handleDrain returns queued alerts as a JSON array and clears the queue.
+func handleDrain(w http.ResponseWriter, r *http.Request) {
+	mu.Lock()
+	batch := queue
+	queue = nil
+	mu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	if batch == nil {
+		batch = []line{}
+	}
+	_ = json.NewEncoder(w).Encode(batch)
 }
 
 func handleAlert(w http.ResponseWriter, r *http.Request) {
@@ -91,6 +106,7 @@ func handleAlert(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		fmt.Println(string(b))
+		queue = append(queue, rec)
 	}
 	w.WriteHeader(http.StatusAccepted)
 }
