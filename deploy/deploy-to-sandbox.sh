@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Deploy repo skills + memory into the oncall sandbox via base64-over-exec.
+# Deploy repo skills, memory, and the investigation scripts into the oncall
+# sandbox. Small text files go via base64-over-exec; the alert-relay binary via
+# `openshell sandbox upload`.
 # Usage: ./deploy/deploy-to-sandbox.sh [sandbox-name]
 set -euo pipefail
 
@@ -15,12 +17,8 @@ put() { # <local-file> <sandbox-abs-path>
 }
 
 echo "== skills =="
-for skill_dir in skills/*/; do
-  name=$(basename "$skill_dir")
-  for f in $(find "$skill_dir" -type f); do
-    rel="${f#skills/}"
-    put "$f" "$WORKSPACE/skills/$rel"
-  done
+for f in $(find skills -type f); do
+  put "$f" "$WORKSPACE/$f"
 done
 
 echo "== memory =="
@@ -28,9 +26,15 @@ for f in $(find memory -type f); do
   put "$f" "$WORKSPACE/$f"
 done
 
+echo "== investigation scripts =="
+put alert-relay/trigger.js "$WORKSPACE/bin/trigger.js"
+put alert-relay/investigate.sh "$WORKSPACE/bin/investigate.sh"
+nemoclaw "$SB" exec -- chmod +x "$WORKSPACE/bin/investigate.sh" >/dev/null
+
 echo "== alert-relay binary =="
+mkdir -p /tmp/opencode
 (cd alert-relay && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o /tmp/opencode/alert-relay-sandbox .)
-put /tmp/opencode/alert-relay-sandbox "$WORKSPACE/bin/alert-relay"
+openshell sandbox upload "$SB" /tmp/opencode/alert-relay-sandbox "$WORKSPACE/bin/alert-relay" >/dev/null
 nemoclaw "$SB" exec -- chmod +x "$WORKSPACE/bin/alert-relay" >/dev/null
 
 echo "done"

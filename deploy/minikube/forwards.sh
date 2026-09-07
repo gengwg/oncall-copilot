@@ -29,12 +29,13 @@ start() {
 }
 
 stop() {
-  [ -f "$PIDFILE" ] || return 0
-  while read -r pid; do kill "$pid" 2>/dev/null; done < "$PIDFILE"
+  [ -f "$PIDFILE" ] || true
+  [ -f "$PIDFILE" ] && while read -r pid; do kill "$pid" 2>/dev/null; done < "$PIDFILE"
   rm -f "$PIDFILE"
-  # kill orphaned kubectl children from previous runs (wrapper kill doesn't
-  # propagate to the port-forward child)
-  pkill -f "kubectl.*port-forward.*19090\|kubectl.*port-forward.*13100\|kubectl.*port-forward.*18080\|kubectl.*port-forward.*19093\|kubectl.*port-forward.*13000" 2>/dev/null
+  # Kill orphaned kubectl port-forward children from previous runs (wrapper
+  # kill doesn't propagate to the port-forward child). ERE: use `|` for
+  # alternation, not `\|`.
+  pkill -f 'kubectl -n .* port-forward' 2>/dev/null
   sleep 1
 }
 

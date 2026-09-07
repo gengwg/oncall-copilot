@@ -5,8 +5,12 @@
 //
 // This OpenClaw build's code-mode exposes `tools` (not `exec`); stdout is at
 // r.result.content[i].text for type=="text".
+const relayToken = (typeof process !== "undefined" && process.env && process.env.RELAY_TOKEN) || "";
 const r = await tools.call("exec", {
-  command: "curl -sf -m 8 http://172.18.0.1:9099/alerts",
+  command:
+    "curl -sf -m 8 " +
+    (relayToken ? `-H "Authorization: Bearer ${relayToken}" ` : "") +
+    "http://172.18.0.1:9099/alerts",
 });
 const parts = r?.result?.content;
 const text = Array.isArray(parts)

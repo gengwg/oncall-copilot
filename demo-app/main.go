@@ -5,7 +5,6 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -28,10 +27,6 @@ var (
 	memBallast  atomic.Value // []byte held to simulate a leak
 	cpuStop     atomic.Value // chan struct{}
 )
-
-func logJSON(level slog.Level, msg string, attrs ...any) {
-	slog.New(slog.NewJSONHandler(os.Stdout, nil)).Log(nil, level, msg, attrs...)
-}
 
 func main() {
 	flag.Parse()
@@ -93,6 +88,14 @@ func handleChaos(w http.ResponseWriter, r *http.Request) {
 		memBallast.Store(b)
 		slog.Warn("memory ballast allocated", "mb", 50)
 	case "cpu":
+		// Stop any existing burners first so re-enabling doesn't orphan them.
+		if s, ok := cpuStop.Load().(chan struct{}); ok && s != nil {
+			select {
+			case <-s:
+			default:
+				close(s)
+			}
+		}
 		stop := make(chan struct{})
 		cpuStop.Store(stop)
 		for i := 0; i < runtime.NumCPU(); i++ {
@@ -102,6 +105,7 @@ func handleChaos(w http.ResponseWriter, r *http.Request) {
 					case <-stop:
 						return
 					default:
+						runtime.Gosched()
 					}
 				}
 			}()
@@ -163,4 +167,3 @@ func btoi(b bool) int {
 	return 0
 }
 
-var _ = json.Marshal // keep encoding/json imported for future endpoints

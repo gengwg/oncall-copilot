@@ -14,7 +14,7 @@ set -uo pipefail
 
 DEMO_APP_URL="${DEMO_APP_URL:-http://localhost:18080}"
 ALERTMANAGER_URL="${ALERTMANAGER_URL:-http://localhost:19093}"
-RELAY_LOG="${RELAY_LOG:-/tmp/opencode/alert-relay.out}"
+RELAY_LOG="${RELAY_LOG:-/tmp/opencode/relay-host.out}"
 WAIT_ALERT_S="${WAIT_ALERT_S:-180}"
 WAIT_RESOLVE_S="${WAIT_RESOLVE_S:-300}"
 

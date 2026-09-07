@@ -50,12 +50,22 @@ var (
 func main() {
 	flag.Parse()
 	http.HandleFunc("POST /alert", handleAlert)
-	http.HandleFunc("GET /alerts", handleDrain)
+	http.HandleFunc("GET /alerts", auth(handleDrain))
 	http.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 	slog.Info("alert-relay listening", "addr", *addr)
 	if err := http.ListenAndServe(*addr, nil); err != nil {
 		slog.Error("server exited", "err", err)
 		os.Exit(1)
+	}
+}
+
+func auth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if *token != "" && r.Header.Get("Authorization") != "Bearer "+*token {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next(w, r)
 	}
 }
 
