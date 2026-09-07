@@ -65,4 +65,40 @@ error, so clients know to raise max_tokens.
 
 ## OpenClaw
 
-(placeholder — add as we build the agent skills/automations)
+### 5. Unattended agent-turn jobs don't reliably execute tools with reasoning models
+
+OpenClaw 2026.7.1. An isolated or custom-session cron `agentTurn` job with a
+reasoning model (Nemotron 3 Ultra) narrates tool calls as text instead of
+executing them (e.g. emits `{"tool": "exec", ...}` in the reply body, or
+`TOOL: search_code\nARGUMENTS: {...}`), and sometimes loops `search_code`
+errors indefinitely. Interactive `openclaw agent --message` in the main session
+executes the same tools fine. `--tools exec,read,write` and `--clear-tools` did
+not fix it; `--thinking off` did not fix it. `--session main` requires
+`systemEvent` payloads (no agentTurn).
+
+Impact: unattended investigation agents are unreliable. Workaround: use a
+`command` payload that runs the deterministic collection and calls the model
+directly, reserving the LLM for analysis.
+
+### 6. Code-mode trigger scripts expose `tools`, not the documented `exec` global
+
+The current Automations docs use `await exec({ command: ... })` and
+`trigger.state`. This build's code-mode exposes `tools` (object) and `trigger`,
+but NOT `exec` or `fetch` (`ReferenceError: exec is not defined`). stdout is at
+`r.result.content[i].text` for `type=="text"` after
+`await tools.call("exec", {command})`. The docs/runtime mismatch cost real
+debugging time.
+
+### 7. Cron `--command-env` values stored in plaintext in job spec
+
+`openclaw cron add --command-env NEBIUS_API_KEY=...` stores the secret in
+plaintext in the job definition (`openclaw cron list --json` shows it). No
+SecretRef support for command-env. Secrets should reference the OpenClaw
+secrets store, not literal values.
+
+### 8. Docs/runtime flag drift
+
+This build's `openclaw cron add` has no `--stream-command`, no `--script`
+payloads, and no `--every <30s` (min 30000ms), though the current Automations
+docs describe all three. Version-pin the docs or gate features behind the
+runtime that introduced them.
