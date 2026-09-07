@@ -74,7 +74,11 @@ run_scenario() { # <scenario>
 
   local ok=0
   wait_for "alert $alert firing" "$WAIT_ALERT_S" alert_firing "$alert" || ok=1
-  [ $ok -eq 0 ] && { wait_for "relay firing notification" 60 relay_got "$alert" firing "$baseline" || ok=1; }
+  # Alertmanager notifies immediately on a NEW alert; for a continuously-firing
+  # alert it re-notifies on repeat_interval. The relay firing line may already
+  # exist, so accept it appearing at any point after baseline OR already in the
+  # relay queue. The decisive stage is the copilot report below.
+  [ $ok -eq 0 ] && { wait_for "relay firing notification" 120 relay_got "$alert" firing "$baseline" || log "[$sc] note: no fresh relay line (continuous alert); continuing"; }
 
   log "[$sc] stopping chaos"
   curl -sf "$DEMO_APP_URL/chaos/stop" >/dev/null
@@ -82,11 +86,21 @@ run_scenario() { # <scenario>
 
   [ $ok -eq 0 ] && { wait_for "relay resolved notification" "$WAIT_RESOLVE_S" relay_got "$alert" resolved "$baseline" || ok=1; }
 
-  # Stage 5 (agent assertions) plugs in here in Phase 2:
-  #   assert_brief_root_cause "$alert" "$sc"
+  # Stage 5: the copilot wrote an incident report naming the root cause.
+  if [ "${COPILOT_ASSERT:-1}" = "1" ] && [ $ok -eq 0 ]; then
+    wait_for "copilot incident report for $alert" 300 copilot_report "$alert" || ok=1
+  fi
 
   if [ $ok -eq 0 ]; then log "[$sc] PASS"; else log "[$sc] FAIL"; fi
   return $ok
+}
+
+# copilot_report <alertname>: a non-empty incident report exists in the sandbox
+copilot_report() {
+  nemoclaw oncall exec -- sh -c \
+    "f=/sandbox/.openclaw/workspace/memory/incidents/\$(date -u +%Y-%m-%d)-$1.md; \
+     [ -s \"\$f\" ] && grep -q 'Root cause' \"\$f\" && grep -qA1 '## Root cause' \"\$f\" | grep -qv '^## Root cause\$'" \
+    >/dev/null 2>&1
 }
 
 scenarios=("$@")

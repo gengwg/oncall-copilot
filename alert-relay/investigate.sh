@@ -1,35 +1,34 @@
 #!/usr/bin/env bash
 # Deterministic incident investigator. Runs as an OpenClaw command payload.
-#   1. Runs real PromQL/LogQL against the demo stack
-#   2. Asks Nemotron (via Token Factory) to analyze the evidence
-#   3. Writes an incident report to memory/incidents/
-#   4. Prints a Telegram brief on stdout (delivered by the cron announce)
+#   1. Drains the alert-relay queue, takes the first firing alert
+#   2. Runs real PromQL/LogQL evidence collection (scenario-appropriate)
+#   3. For unfamiliar error strings, enriches with a Tavily web search
+#   4. Asks Nemotron (via the sandbox inference route) to analyze
+#   5. Writes an incident report to memory/incidents/
+#   6. Prints a Telegram brief on stdout (delivered by the cron announce)
 #
-# Usage: investigate.sh '<alert-json-line>'   (or no arg to drain the relay queue)
+# Usage: investigate.sh ['<alert-json-line>']
 set -uo pipefail
-
-RELAY="${ALERT_RELAY_URL:-http://172.18.0.1:9099}"
-# No arg: drain the relay queue and take the first firing alert.
-if [ $# -eq 0 ]; then
-  batch=$(curl -sf -m 8 "$RELAY/alerts" 2>/dev/null || echo "[]")
-  alert_json=$(printf '%s' "$batch" | jq -c '[.[] | select(.status=="firing")][0] // empty' 2>/dev/null)
-  [ -z "$alert_json" ] && { echo "NO_REPLY"; exit 0; }
-  set -- "$alert_json"
-fi
 
 WORKSPACE=/sandbox/.openclaw/workspace
 export PROMETHEUS_URL="${PROMETHEUS_URL:-http://172.18.0.1:19090}"
 export LOKI_URL="${LOKI_URL:-http://172.18.0.1:13100}"
+RELAY="${ALERT_RELAY_URL:-http://172.18.0.1:9099}"
 PROM="$WORKSPACE/skills/promql-query/scripts/query.sh"
 LOGQ="$WORKSPACE/skills/logql-query/scripts/query.sh"
 INCIDENTS="$WORKSPACE/memory/incidents"
 RUNBOOKS="$WORKSPACE/memory/runbooks"
 MODEL="${MODEL:-nvidia/Nemotron-3-Ultra-550b-a55b}"
-# Token Factory is reached via the sandbox's managed inference route
-# (direct api.tokenfactory.nebius.com egress is policy-blocked).
 INFERENCE_URL="${INFERENCE_URL:-https://inference.local/v1/chat/completions}"
 
-alert_json="$1"
+if [ $# -eq 0 ]; then
+  batch=$(curl -sf -m 8 "$RELAY/alerts" 2>/dev/null || echo "[]")
+  alert_json=$(printf '%s' "$batch" | jq -c '[.[] | select(.status=="firing")][0] // empty' 2>/dev/null)
+  [ -z "$alert_json" ] && { echo "NO_REPLY"; exit 0; }
+else
+  alert_json="$1"
+fi
+
 alertname=$(printf '%s' "$alert_json" | jq -r '.alertname // "Unknown"')
 service=$(printf '%s' "$alert_json" | jq -r '.service // "demo-app"')
 severity=$(printf '%s' "$alert_json" | jq -r '.severity // "warning"')
@@ -43,28 +42,43 @@ mkdir -p "$INCIDENTS"
 
 runbook=$(cat "$RUNBOOKS/$service.md" 2>/dev/null || echo "no runbook")
 
-# --- collect evidence (read-only, bounded) ---
+# --- evidence collection (scenario-appropriate, read-only, bounded) ---
 err_ratio=$($PROM instant 'sum(rate(demo_errors_total[5m])) / sum(rate(demo_requests_total[5m]))' 2>/dev/null | jq -r '.value // "n/a"' | head -1)
 heap=$($PROM instant 'demo_heap_alloc_bytes' 2>/dev/null | jq -r '.value // "n/a"' | head -1)
-lat=$($PROM instant 'demo_latency_mode' 2>/dev/null | jq -r '.value // "n/a"' | head -1)
+lat_mode=$($PROM instant 'demo_latency_mode' 2>/dev/null | jq -r '.value // "n/a"' | head -1)
+up=$($PROM instant "up{job=\"$service\"}" 2>/dev/null | jq -r '.value // "n/a"' | head -1)
 err_logs=$($LOGQ tail "{service=\"$service\"} |= \"ERROR\"" 15 3 2>/dev/null | head -3)
+err_string=$(printf '%s' "$err_logs" | jq -r 'try (fromjson | .err // .msg // .) catch .' 2>/dev/null | head -1)
+
+# --- Tavily enrichment for unfamiliar errors ---
+web_context="not queried"
+if [ -n "${TAVILY_API_KEY:-}" ] && [ -n "$err_string" ] && [ "$err_string" != "null" ]; then
+  web_context=$(jq -n --arg q "$err_string $service" '{query:$q, max_results:2, api_key:env.TAVILY_API_KEY}' \
+    | curl -sf -m 20 https://api.tavily.com/search -H "Content-Type: application/json" -d @- 2>/dev/null \
+    | jq -r '[.results[]? | "- " + .title + ": " + (.content|tostring|.[0:180])] | join("\n")' 2>/dev/null)
+  [ -z "$web_context" ] && web_context="no results"
+fi
 
 # --- Nemotron analysis ---
-prompt="You are an SRE. Given this alert and live evidence, write a 2-sentence root-cause assessment and 1 suggested first action. Be specific; use the numbers.
+prompt="You are an SRE analyzing a live alert. Given the alert, live evidence, and web context, write a 2-sentence root-cause assessment and 1 suggested first action. Be specific; use the numbers.
 
 ALERT: $alertname ($severity) on $service — $summary
 
-EVIDENCE:
+LIVE EVIDENCE:
+- up: $up
 - error_ratio_5m: $err_ratio
 - heap_alloc_bytes: $heap
-- latency_mode: $lat
+- latency_mode: $lat_mode
 - recent ERROR logs:
 $err_logs
+
+WEB CONTEXT (for the error string):
+$web_context
 
 RUNBOOK EXCERPT:
 $(printf '%s' "$runbook" | head -20)
 
-Reply format (plain text):
+Reply format (plain text, two lines):
 ROOT CAUSE: <2 sentences>
 ACTION: <1 sentence>"
 
@@ -79,7 +93,7 @@ action=$(printf '%s' "$analysis" | sed -n 's/^ACTION: *//p' | head -1)
 [ -z "$rootcause" ] && rootcause="$analysis"
 [ -z "$action" ] && action="See runbook."
 
-# --- write incident report ---
+# --- incident report ---
 cat > "$report" <<EOF
 # $alertname — $date
 
@@ -92,13 +106,17 @@ cat > "$report" <<EOF
 $rootcause
 
 ## Evidence
+- up: $up
 - error_ratio_5m: $err_ratio
 - heap_alloc_bytes: $heap
-- latency_mode: $lat
+- latency_mode: $lat_mode
 - recent ERROR logs:
 \`\`\`
 $err_logs
 \`\`\`
+
+## Web context
+$web_context
 
 ## Suggested first action
 $action
@@ -108,5 +126,6 @@ $analysis
 EOF
 
 # --- Telegram brief on stdout (cron announce delivers it) ---
-printf 'ALERT: %s (%s)\nService: %s\nLikely cause: %s\nEvidence: err_ratio=%s heap=%s\nSuggested: %s\n' \
-  "$alertname" "$severity" "$service" "$(printf '%s' "$rootcause" | head -c 200)" "$err_ratio" "$heap" "$(printf '%s' "$action" | head -c 120)"
+printf 'ALERT: %s (%s)\nService: %s\nLikely cause: %s\nEvidence: err_ratio=%s heap=%s latency_mode=%s\nSuggested: %s\n' \
+  "$alertname" "$severity" "$service" "$(printf '%s' "$rootcause" | head -c 200)" \
+  "$err_ratio" "$heap" "$lat_mode" "$(printf '%s' "$action" | head -c 120)"
