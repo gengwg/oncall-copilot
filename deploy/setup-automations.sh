@@ -1,31 +1,36 @@
 #!/usr/bin/env bash
-# Wire the OpenClaw cron automations for the on-call copilot.
+# Wire the OpenClaw cron automation for the on-call copilot.
 # Run from the HOST; it drives the sandbox via `nemoclaw <sb> exec`.
 #
-# alert-intake: every 15s, trigger.js drains the host alert-relay queue; when
-#   it returns alerts, an isolated agent turn investigates and pages Telegram.
+# alert-intake: every 30s, bin/investigate.sh (command payload) drains the
+#   alert-relay queue, collects PromQL/LogQL evidence, calls Nemotron for RCA,
+#   writes memory/incidents/<date>-<alert>.md, and pages Telegram.
+#
+# Required env: TELEGRAM_CHAT_ID, NEBIUS_API_KEY, TAVILY_API_KEY, RELAY_TOKEN.
 set -euo pipefail
 
 SB="${SB:-oncall}"
 TELEGRAM_CHAT_ID="${TELEGRAM_CHAT_ID:?set TELEGRAM_CHAT_ID}"
+NEBIUS_API_KEY="${NEBIUS_API_KEY:?set NEBIUS_API_KEY}"
+TAVILY_API_KEY="${TAVILY_API_KEY:?set TAVILY_API_KEY}"
+RELAY_TOKEN="${RELAY_TOKEN:?set RELAY_TOKEN (must match the k8s relay-token secret)}"
 WORKSPACE=/sandbox/.openclaw/workspace
-# The cron --model flag takes the full provider/model path as registered in
-# OpenClaw (inference/<model-id>), not a bare model id.
-MODEL_INVESTIGATE="${MODEL_INVESTIGATE:-inference/nvidia/Nemotron-3-Ultra-550b-a55b}"
 
-PROMPT=$(cat "$(dirname "$0")/agent-investigate-prompt.md")
+# Idempotent re-runs: drop any prior alert-intake job (agentTurn or command).
+nemoclaw "$SB" exec -- sh -c "openclaw cron list --json 2>/dev/null | python3 -c 'import sys,json; [print(x[\"id\"]) for x in json.load(sys.stdin)[\"jobs\"] if x[\"name\"]==\"alert-intake\"]' | while read -r id; do openclaw cron rm \"\$id\" 2>/dev/null; done" >/dev/null 2>&1 || true
 
-# Remove any prior copy for idempotent re-runs.
-nemoclaw "$SB" exec -- sh -c "openclaw cron list --json 2>/dev/null | jq -r '.[] | select(.name==\"alert-intake\") | .id' | while read -r id; do openclaw cron rm \"\$id\" 2>/dev/null; done" >/dev/null 2>&1 || true
-
+# Note: --command-env stores secrets in the job spec (see docs/feedback.md #7).
+# Acceptable for a local demo; a production deployment should use the OpenClaw
+# secrets store instead.
 nemoclaw "$SB" exec -- openclaw cron add \
   --name "alert-intake" \
   --every 30s \
-  --trigger-script "$WORKSPACE/bin/trigger.js" \
+  --command "$WORKSPACE/bin/investigate.sh" \
+  --command-env "NEBIUS_API_KEY=$NEBIUS_API_KEY" \
+  --command-env "TAVILY_API_KEY=$TAVILY_API_KEY" \
+  --command-env "RELAY_TOKEN=$RELAY_TOKEN" \
+  --timeout-seconds 180 \
   --session isolated \
-  --model "$MODEL_INVESTIGATE" \
-  --message "$PROMPT" \
-  --tools exec,read,write \
   --announce \
   --channel telegram \
   --to "$TELEGRAM_CHAT_ID"

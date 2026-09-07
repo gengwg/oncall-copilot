@@ -33,9 +33,9 @@ stop() {
   [ -f "$PIDFILE" ] && while read -r pid; do kill "$pid" 2>/dev/null; done < "$PIDFILE"
   rm -f "$PIDFILE"
   # Kill orphaned kubectl port-forward children from previous runs (wrapper
-  # kill doesn't propagate to the port-forward child). ERE: use `|` for
-  # alternation, not `\|`.
-  pkill -f 'kubectl -n .* port-forward' 2>/dev/null
+  # kill doesn't propagate to the port-forward child). Anchored to this
+  # project's namespaces so we don't kill unrelated forwards on a shared box.
+  pkill -f 'kubectl -n (observability|demo) port-forward' 2>/dev/null
   sleep 1
 }
 

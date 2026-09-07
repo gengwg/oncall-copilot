@@ -16,7 +16,6 @@ export LOKI_URL="${LOKI_URL:-http://172.18.0.1:13100}"
 RELAY="${ALERT_RELAY_URL:-http://172.18.0.1:9099}"
 # Bearer token for the relay's /alerts drain (same token Alertmanager uses to POST).
 RELAY_TOKEN="${RELAY_TOKEN:-}"
-relay_auth() { [ -n "$RELAY_TOKEN" ] && printf 'Authorization: Bearer %s' "$RELAY_TOKEN"; }
 PROM="$WORKSPACE/skills/promql-query/scripts/query.sh"
 LOGQ="$WORKSPACE/skills/logql-query/scripts/query.sh"
 INCIDENTS="$WORKSPACE/memory/incidents"
@@ -25,7 +24,9 @@ MODEL="${MODEL:-nvidia/Nemotron-3-Ultra-550b-a55b}"
 INFERENCE_URL="${INFERENCE_URL:-https://inference.local/v1/chat/completions}"
 
 if [ $# -eq 0 ]; then
-  batch=$(curl -sf -m 8 -H "$(relay_auth)" "$RELAY/alerts" 2>/dev/null || echo "[]")
+  auth_header=()
+  [ -n "$RELAY_TOKEN" ] && auth_header=(-H "Authorization: Bearer $RELAY_TOKEN")
+  batch=$(curl -sf -m 8 "${auth_header[@]}" "$RELAY/alerts" 2>/dev/null || echo "[]")
   alert_json=$(printf '%s' "$batch" | jq -c '[.[] | select(.status=="firing")][0] // empty' 2>/dev/null)
   [ -z "$alert_json" ] && { echo "NO_REPLY"; exit 0; }
 else
@@ -146,8 +147,9 @@ action=$(printf '%s' "$analysis" | sed -n 's/^ACTION: *//p' | head -1)
   printf -- '- up: %s\n' "$up"
   printf -- '- error_ratio_5m: %s\n' "$err_ratio"
   printf -- '- heap_alloc_bytes: %s\n' "$heap"
+  printf -- '- heap_trend: %s\n' "${heap_trend:-n/a}"
   printf -- '- latency_mode: %s\n' "$lat_mode"
-  printf -- '- recent ERROR logs:\n```\n%s\n```\n\n' "$err_logs"
+  printf -- '- recent logs (%sm window from alert start):\n```\n%s\n```\n\n' "$lookback" "$err_logs"
   printf '## Web context\n%s\n\n' "$web_context"
   printf '## Suggested first action\n%s\n\n' "$action"
   printf '## Full Nemotron analysis\n%s\n' "$analysis"
