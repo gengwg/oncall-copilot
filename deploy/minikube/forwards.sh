@@ -18,7 +18,9 @@ start() {
   : > "$PIDFILE"
   for s in "${specs[@]}"; do
     read -r ns svc ports <<< "$s"
-    setsid nohup bash -c "while true; do kubectl -n '$ns' port-forward '$svc' '$ports' >/dev/null 2>&1; sleep 2; done" >/dev/null 2>&1 &
+    # --address 0.0.0.0 so the sandbox can reach the host services through the
+    # docker bridge gateway (172.18.0.1), not just host loopback.
+    setsid nohup bash -c "while true; do kubectl -n '$ns' port-forward --address localhost,172.18.0.1 '$svc' '$ports' >/dev/null 2>&1; sleep 2; done" >/dev/null 2>&1 &
     echo $! >> "$PIDFILE"
   done
   disown -a 2>/dev/null || true
@@ -30,6 +32,10 @@ stop() {
   [ -f "$PIDFILE" ] || return 0
   while read -r pid; do kill "$pid" 2>/dev/null; done < "$PIDFILE"
   rm -f "$PIDFILE"
+  # kill orphaned kubectl children from previous runs (wrapper kill doesn't
+  # propagate to the port-forward child)
+  pkill -f "kubectl.*port-forward.*19090\|kubectl.*port-forward.*13100\|kubectl.*port-forward.*18080\|kubectl.*port-forward.*19093\|kubectl.*port-forward.*13000" 2>/dev/null
+  sleep 1
 }
 
 case "${1:-start}" in

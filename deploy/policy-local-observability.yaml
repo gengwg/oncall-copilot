@@ -1,0 +1,30 @@
+# Custom policy: read-only access to the host's Prometheus and Loki
+# (kubectl port-forwards bound to 127.0.0.1 on the host, reached from the
+# sandbox through the docker bridge gateway 172.18.0.1).
+preset:
+  name: local-observability
+  description: "Read-only Prometheus and Loki on the host (demo observability stack)"
+
+network_policies:
+  local_observability:
+    name: local_observability
+    endpoints:
+      - host: "172.18.0.1"
+        port: 19090
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow: { method: GET, path: "/api/v1/**" }
+          - allow: { method: GET, path: "/-/healthy" }
+      - host: "172.18.0.1"
+        port: 13100
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow: { method: GET, path: "/loki/api/v1/**" }
+          - allow: { method: GET, path: "/ready" }
+    binaries:
+      - { path: /usr/local/bin/curl }
+      - { path: /usr/bin/curl }
+      - { path: /usr/local/bin/node }
+      - { path: /usr/bin/node }
