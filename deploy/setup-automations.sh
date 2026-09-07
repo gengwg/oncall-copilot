@@ -13,7 +13,13 @@ SB="${SB:-oncall}"
 TELEGRAM_CHAT_ID="${TELEGRAM_CHAT_ID:?set TELEGRAM_CHAT_ID}"
 NEBIUS_API_KEY="${NEBIUS_API_KEY:?set NEBIUS_API_KEY}"
 TAVILY_API_KEY="${TAVILY_API_KEY:?set TAVILY_API_KEY}"
-RELAY_TOKEN="${RELAY_TOKEN:?set RELAY_TOKEN (must match the k8s relay-token secret)}"
+# Derive the relay token from the cluster (same secret Alertmanager uses), so
+# the cron's drain auth always matches the running relay. Exported RELAY_TOKEN
+# overrides.
+if [ -z "${RELAY_TOKEN:-}" ]; then
+  RELAY_TOKEN=$(kubectl -n observability get secret relay-token -o jsonpath='{.data.token}' 2>/dev/null | base64 -d || true)
+fi
+RELAY_TOKEN="${RELAY_TOKEN:?could not read relay-token secret from the observability namespace and RELAY_TOKEN is unset}"
 WORKSPACE=/sandbox/.openclaw/workspace
 
 # Idempotent re-runs: drop any prior alert-intake job (agentTurn or command).

@@ -27,7 +27,6 @@ for f in $(find memory -type f); do
 done
 
 echo "== investigation scripts =="
-put alert-relay/trigger.js "$WORKSPACE/bin/trigger.js"
 put alert-relay/investigate.sh "$WORKSPACE/bin/investigate.sh"
 nemoclaw "$SB" exec -- chmod +x "$WORKSPACE/bin/investigate.sh" >/dev/null
 

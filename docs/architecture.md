@@ -44,9 +44,10 @@ minikube (demo env)
 - **inference.local, not direct Token Factory egress.** The sandbox policy
   blocks api.tokenfactory.nebius.com; the managed inference route
   (https://inference.local/v1) is the sanctioned path (COMPATIBLE_API_KEY).
-- **trigger.js uses tools.call, not exec.** This build's code-mode exposes
-  `tools` (stdout at r.result.content[i].text), not the `exec` global the
-  current docs use. (Documented in docs/feedback.md.)
+- **Command payload, single writer.** The cron runs `bin/investigate.sh`
+  every 30s; a `flock` serializes runs so a slow Nemotron call can't overlap
+  the next tick. (An earlier condition-trigger design used code-mode scripts;
+  see docs/feedback.md for why that path was dropped.)
 - **Custom policy preset** `local-observability` opens read-only Prom/Loki on
   the docker bridge gateway (172.18.0.1) with a private-host trust exemption.
 

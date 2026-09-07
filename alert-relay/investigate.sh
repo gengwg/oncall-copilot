@@ -10,6 +10,13 @@
 # Usage: investigate.sh ['<alert-json-line>']
 set -uo pipefail
 
+# The 30s cadence can overlap a slow run (Nemotron -m 150 + Tavily -m 20).
+# Serialize with a lock so two runs never double-drain or clobber one report.
+LOCKFILE="${WORKSPACE:-/sandbox/.openclaw/workspace}/.investigate.lock"
+mkdir -p "$(dirname "$LOCKFILE")" 2>/dev/null || true
+exec 9>"$LOCKFILE" 2>/dev/null || true
+flock -n 9 || { echo "NO_REPLY"; exit 0; }
+
 WORKSPACE=/sandbox/.openclaw/workspace
 export PROMETHEUS_URL="${PROMETHEUS_URL:-http://172.18.0.1:19090}"
 export LOKI_URL="${LOKI_URL:-http://172.18.0.1:13100}"
