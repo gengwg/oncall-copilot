@@ -13,9 +13,8 @@ INCIDENT_DIR=/tmp/opencode/dashboard-incidents
 DASH_PORT="${DASH_PORT:-18099}"
 mkdir -p "$RUN" "$INCIDENT_DIR"
 
-relay_token() {
-  kubectl -n observability get secret relay-token -o jsonpath='{.data.token}' 2>/dev/null | base64 -d
-}
+# shellcheck disable=SC1091
+source "$(dirname "$0")/lib.sh"
 
 start() {
   echo "== port-forwards =="

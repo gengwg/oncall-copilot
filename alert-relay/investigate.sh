@@ -12,10 +12,16 @@ set -uo pipefail
 
 # The 30s cadence can overlap a slow run (Nemotron -m 150 + Tavily -m 20).
 # Serialize with a lock so two runs never double-drain or clobber one report.
+# If flock is absent, proceed unlocked with a visible warning rather than
+# silently NO_REPLY-ing every tick (flock missing -> exit 127 -> silent outage).
 LOCKFILE="${WORKSPACE:-/sandbox/.openclaw/workspace}/.investigate.lock"
 mkdir -p "$(dirname "$LOCKFILE")" 2>/dev/null || true
-exec 9>"$LOCKFILE" 2>/dev/null || true
-flock -n 9 || { echo "NO_REPLY"; exit 0; }
+if command -v flock >/dev/null 2>&1; then
+  exec 9>"$LOCKFILE" 2>/dev/null || true
+  flock -n 9 || { echo "NO_REPLY"; exit 0; }
+else
+  echo "warn: flock not found; running unlocked" >&2
+fi
 
 WORKSPACE=/sandbox/.openclaw/workspace
 export PROMETHEUS_URL="${PROMETHEUS_URL:-http://172.18.0.1:19090}"
