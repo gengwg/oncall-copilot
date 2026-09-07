@@ -1,68 +1,59 @@
-# Architecture
+# Architecture (as built)
 
-## Overview
+## Data flow
 
 ```
-minikube (demo env, local)                     NemoClaw/OpenShell sandbox (host)
-+----------------------+                       +--------------------------------------+
-| demo-app (/chaos)    |                       | OpenClaw gateway (always-on)         |
-| Prometheus           |  scrape               |                                      |
-| Alertmanager --webhook--+---> alert-relay ---+--> stream automation fires agent turn|
-| Loki                 |       (stdout lines)  |   1. triage (Nemotron 3 Nano)        |
-| Grafana              |                       |   2. investigate (Nemotron 3 Ultra): |
-+----------------------+                       |      - promql-query skill -> Prom    |
-                                               |      - logql-query skill -> Loki     |
-                                               |      - tavily web search (native)    |
-                                               |      - runbook-memory (workspace md) |
-                                               |   3. write incident report           |
-                                               |   4. deliver brief                   |
-                                               +--------+------------------+----------+
-                                                        |                  |
-                                           Telegram channel (native)       |
-                                                        |                  |
-                                                        v                  v
-                                                  user's phone      incident dashboard
-                                                  (the "page")      (Nebius Serverless,
-                                                                     public demo URL)
+minikube (demo env)
++----------------------+
+| demo-app (/chaos)    |
+| Prometheus (alerts)  |
+| Alertmanager --webhook-----+        host
+| Loki (logs)          |     |  +-----------------------------+
++----------------------+     +->| alert-relay (0.0.0.0:9099)  |
+        ^                      |  POST /alert -> stdout+queue|
+        |                      |  GET /alerts  -> drain      |
+        |                      +--------------+--------------+
+        | kubectl port-forwards               |
+        | (localhost + 172.18.0.1)            | policy: local-observability
+        |                                     v
+        |        NemoClaw / OpenShell sandbox (oncall)
+        |        +---------------------------------------------+
+        +--------| OpenClaw cron: alert-intake (every 30s)     |
+        Prom/Loki|   bin/investigate.sh (command payload)      |
+        via      |     1. drain relay /alerts (first firing)   |
+        172.18.0.1|    2. promql-query + logql-query evidence  |
+                 |     3. Tavily search (error string)         |
+                 |     4. Nemotron 3 Ultra RCA (inference.local)|
+                 |     5. write memory/incidents/<date>-<n>.md |
+                 |     6. print brief -> cron announce         |
+                 +------------------+--------------------------+
+                                    |
+                                    v
+                          Telegram (@gengwg_oncall_bot)
+                          (the page, deliveryStatus: delivered)
 ```
 
-## Component choices (verified against docs)
+## Key implementation decisions
 
-| Need | Mechanism | Custom code? |
-|---|---|---|
-| Alert intake | OpenClaw automation `--stream-command` supervising `alert-relay` (webhook -> stdout JSON lines) | yes, small Go server |
-| Metrics queries | `promql-query` skill (SKILL.md + curl/jq script) | yes |
-| Log queries | `logql-query` skill (SKILL.md + curl/jq script) | yes |
-| Persistent memory | OpenClaw workspace markdown + built-in memory; runbooks seeded in workspace | content only |
-| Web search | Tavily, wired at NemoClaw onboarding (native support) | no |
-| Paging | OpenClaw Telegram channel (native), `--announce --channel telegram` | no |
-| Demo URL | incident dashboard web app on Nebius Serverless Endpoints | yes |
-| Models | Token Factory: Ultra = investigation turns, Nano = triage jobs (`--model` per automation) | no |
+- **Command payload, not agent turn.** This OpenClaw build (2026.7.1) does not
+  reliably execute tools in unattended isolated/custom agent-turn jobs with the
+  reasoning Ultra model (it narrates instead of calling exec). A deterministic
+  command payload (investigate.sh) runs the real queries and calls Nemotron
+  directly via the sandbox's managed inference route. More reliable, and the
+  Nemotron analysis is the LLM value-add where it matters.
+- **inference.local, not direct Token Factory egress.** The sandbox policy
+  blocks api.tokenfactory.nebius.com; the managed inference route
+  (https://inference.local/v1) is the sanctioned path (COMPATIBLE_API_KEY).
+- **trigger.js uses tools.call, not exec.** This build's code-mode exposes
+  `tools` (stdout at r.result.content[i].text), not the `exec` global the
+  current docs use. (Documented in docs/feedback.md.)
+- **Custom policy preset** `local-observability` opens read-only Prom/Loki on
+  the docker bridge gateway (172.18.0.1) with a private-host trust exemption.
 
-## Investigation loop
+## Verified end to end
 
-1. Alertmanager fires -> alert-relay prints alert JSON line.
-2. Stream automation batches the line, fires an isolated agent turn with the
-   alert payload (model: Nano) for triage: severity, service, dedupe against
-   `memory/incidents/`.
-3. Triage turn escalates to an investigation turn (model: Ultra) with the
-   runbook for the affected service. The agent runs promql-query/logql-query
-   to test hypotheses, optionally tavily-search for unfamiliar errors.
-4. Agent writes `memory/incidents/<date>-<alertname>.md` (report) and updates
-   the runbook if something new was learned.
-5. Brief delivered to Telegram: what fired, likely root cause, evidence
-   (query results), suggested first actions, link to dashboard.
-6. Dashboard reads the same incident store and renders the feed.
-
-## Incident store
-
-Single source of truth: `memory/incidents/*.md` in the agent workspace.
-Dashboard reads them via a sync sidecar (workspace dir is host-mounted);
-keeps the agent as the only writer.
-
-## Security posture
-
-- Agent runs inside OpenShell sandbox with NemoClaw network policy:
-  allowlist = Token Factory, Tavily, Telegram, minikube services only.
-- promql/logql skills are read-only HTTP GETs.
-- alert-relay binds loopback + minikube network only, token-authenticated.
+All three chaos scenarios (error, latency, memory) pass `tests/e2e/run.sh`:
+chaos -> Prometheus alert -> Alertmanager -> relay -> cron drain -> PromQL/
+LogQL evidence -> Tavily web context -> Nemotron 3 Ultra RCA -> incident
+report -> Telegram page. Reports correctly distinguish the injected failure
+from resource exhaustion.
