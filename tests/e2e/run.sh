@@ -95,11 +95,13 @@ run_scenario() { # <scenario>
   return $ok
 }
 
-# copilot_report <alertname>: a non-empty incident report exists in the sandbox
+# copilot_report <alertname>: incident report exists with a non-empty root cause
 copilot_report() {
   nemoclaw oncall exec -- sh -c \
     "f=/sandbox/.openclaw/workspace/memory/incidents/\$(date -u +%Y-%m-%d)-$1.md; \
-     [ -s \"\$f\" ] && grep -q 'Root cause' \"\$f\" && grep -qA1 '## Root cause' \"\$f\" | grep -qv '^## Root cause\$'" \
+     [ -s \"\$f\" ] || exit 1; \
+     rc=\$(sed -n '/^## Root cause/,/^## /p' \"\$f\" | sed '1d;/^## /d' | tr -d '[:space:]'); \
+     [ -n \"\$rc\" ]" \
     >/dev/null 2>&1
 }
 

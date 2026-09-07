@@ -48,7 +48,8 @@ heap=$($PROM instant 'demo_heap_alloc_bytes' 2>/dev/null | jq -r '.value // "n/a
 lat_mode=$($PROM instant 'demo_latency_mode' 2>/dev/null | jq -r '.value // "n/a"' | head -1)
 up=$($PROM instant "up{job=\"$service\"}" 2>/dev/null | jq -r '.value // "n/a"' | head -1)
 err_logs=$($LOGQ tail "{service=\"$service\"} |= \"ERROR\"" 15 3 2>/dev/null | head -3)
-err_string=$(printf '%s' "$err_logs" | jq -r 'try (fromjson | .err // .msg // .) catch .' 2>/dev/null | head -1)
+# Extract the error string from JSON logs (tab-separated ts + json payload).
+err_string=$(printf '%s' "$err_logs" | head -1 | sed 's/^[^\t]*\t//' | jq -r 'try (.err // .msg // empty) catch empty' 2>/dev/null | head -1)
 
 # --- Tavily enrichment for unfamiliar errors ---
 web_context="not queried"
