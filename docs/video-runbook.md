@@ -1,6 +1,6 @@
 # Video run-book — record in one take (~2.5 min)
 
-Prep: terminal left, Telegram app right. Narration cues in [brackets].
+Prep: terminal left, **Telegram Desktop** right (not phone). Narration cues in [brackets].
 
 ## Scene 0 — before you hit record
 
