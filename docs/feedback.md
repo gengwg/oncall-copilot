@@ -3,6 +3,11 @@
 Collected while building the on-call copilot. Each item is reproducible.
 This doubles as hackathon "Most Valuable Feedback" submission material.
 
+**Observed on `nemoclaw` CLI v0.0.109** (npm `nemoclaw@0.1.0`, the only version
+published to npm at the time of writing). Upstream `NVIDIA/NemoClaw` was at tag
+`v0.0.123`, so some of these may already be fixed in builds not published to
+npm. Where an upstream issue already tracks a finding, it is cited inline.
+
 ## NemoClaw (v0.0.109, OpenShell 0.0.101, Ubuntu 26.04 host, Docker 29)
 
 ### 1. Dashboard port reallocation breaks the forward (agent-recoverable blocker)
@@ -53,6 +58,9 @@ the validated matrix.
 
 ### 9. `openshell forward start` reports failure on a forward that succeeded
 
+No upstream issue matches this one; the closest, #7266, is a listener that
+genuinely failed to start rather than a probe misreporting one that worked.
+
 `openshell forward start --background 18789 oncall` exits 52 with
 `ssh exited before local forward listener opened on 127.0.0.1:18789`, but the
 forward is up. Running the same command with `-vv` shows ssh getting all the
@@ -80,6 +88,13 @@ failure, and treat an existing healthy forward as success.
 
 ### 10. `rebuild` prints success, exits 1, and silently drops cron jobs
 
+A closed issue, [NVIDIA/NemoClaw#11137][i11137], covers `rebuild` exiting 1, but
+for a sandbox left in an Error phase. Here the rebuild genuinely succeeds and
+the exit code is the only thing wrong — and the dropped cron jobs are not
+mentioned anywhere upstream.
+
+[i11137]: https://github.com/NVIDIA/NemoClaw/issues/11137
+
 `nemoclaw <sb> rebuild -y` ends with:
 
 ```
@@ -103,6 +118,17 @@ inconclusive; either restore cron jobs alongside workspace state or say plainly
 that they must be re-registered.
 
 ### 11. Post-rebuild device scope upgrade has no discoverable approval path
+
+**Already tracked upstream as [NVIDIA/NemoClaw#10070][i10070] (open).** That
+issue reports the same gap and notes that the fix (#9853, "name the openclaw
+devices review path on a permission scope upgrade") shipped in `v0.0.114` yet
+still does not emit. This report is a confirmation on `v0.0.109`, which predates
+that fix, so it adds a second platform and the exact recovery sequence rather
+than a new finding. The related hang after approval is
+[NVIDIA/NemoClaw#11422][i11422].
+
+[i10070]: https://github.com/NVIDIA/NemoClaw/issues/10070
+[i11422]: https://github.com/NVIDIA/NemoClaw/issues/11422
 
 After a rebuild, every gateway call fails with:
 
@@ -186,6 +212,8 @@ docs describe all three. Version-pin the docs or gate features behind the
 runtime that introduced them.
 
 ### 12. Channel delivery failure is only visible as a cron `error`
+
+No upstream issue matches this one.
 
 A cron job with `--announce --channel telegram` whose delivery fails reports:
 
