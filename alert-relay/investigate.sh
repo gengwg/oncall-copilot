@@ -43,6 +43,19 @@ INFERENCE_URL="${INFERENCE_URL:-https://inference.local/v1/chat/completions}"
 # not empty results, so neither the jq fallback nor ${x:-n/a} catches them and
 # "err_ratio=NaN" reaches the brief, where the model remarks on it instead of
 # the incident.
+# Telegram briefs are capped per field. Cutting at a byte boundary lops words in
+# half ("and verify K"), which reads as a broken page rather than a short one.
+clip() { # clip <max-chars>: flatten newlines, trim at a word boundary, mark elision
+  tr '\n' ' ' | awk -v n="$1" '{
+    gsub(/  +/, " ");
+    if (length($0) <= n) { print; next }
+    s = substr($0, 1, n);
+    sub(/[^ ]*$/, "", s);
+    sub(/[ ,;:.]+$/, "", s);
+    print s "..."
+  }'
+}
+
 norm() {
   case "$1" in
     ""|NaN|nan|+Inf|-Inf|Inf|inf) echo "n/a" ;;
@@ -221,8 +234,8 @@ action=$(printf '%s' "$analysis" | sed -n 's/^ACTION: *//p' | head -1)
 
 # --- Telegram brief on stdout (cron announce delivers it) ---
 printf 'ALERT: %s (%s)\nService: %s\nLikely cause: %s\nEvidence: err_ratio=%s heap=%s latency_mode=%s\nSuggested: %s\n' \
-  "$alertname" "$severity" "$service" "$(printf '%s' "$rootcause" | head -c 200)" \
-  "$err_ratio" "$heap" "$lat_mode" "$(printf '%s' "$action" | head -c 120)"
+  "$alertname" "$severity" "$service" "$(printf '%s' "$rootcause" | clip 200)" \
+  "$err_ratio" "$heap" "$lat_mode" "$(printf '%s' "$action" | clip 120)"
 }
 
 briefed=0
