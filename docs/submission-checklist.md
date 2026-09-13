@@ -81,7 +81,9 @@ Personal AI Track
 https://github.com/gengwg/oncall-copilot
 ```
 
-> Done: the repo is public. Latest release is `v1.1.0`.
+> **The repo is PRIVATE right now** (deliberately, until closer to submission).
+> A required field, so flip it back before submitting — see Step A. Latest
+> release is `v1.1.0`; release pages 404 for the public while private.
 > Apache-2.0 LICENSE is at the repo root. README has setup + how Nebius/
 > Nemotron/Tavily were used.
 
@@ -161,19 +163,18 @@ N/A — newly created during the submission period (Aug 26 – Oct 30, 2026).
 
 ---
 
-## Step A — make the repo public (DONE — verified public)
+## Step A — make the repo public (REQUIRED: currently private)
 
-```bash
-cd /home/gengwg/projects/nebius-hackathon
-git remote add origin git@github.com:gengwg/oncall-copilot.git 2>/dev/null || true
-gh repo create gengwg/oncall-copilot --public --source=. --push 2>/dev/null || git push -u origin main
-# verify: gh repo view gengwg/oncall-copilot --json visibility
-```
+The repo exists and is pushed; it is deliberately private until closer to
+submission. One command flips it back:
 
-If the repo already exists on GitHub as private, flip it:
 ```bash
 gh repo edit gengwg/oncall-copilot --visibility public --accept-visibility-change-consequences
+gh repo view gengwg/oncall-copilot --json visibility   # verify
 ```
+
+Do this before submitting: a private repo fails the required "public code
+repository" field, and the release pages 404 for judges while it is private.
 
 ## Step B — before submitting, confirm services stay up for judging
 
