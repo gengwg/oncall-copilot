@@ -82,36 +82,43 @@ cp .env.example .env   # fill in NEBIUS_API_KEY, TAVILY_API_KEY,
 # 2. local observability stack + demo-app
 ./deploy/minikube/up.sh
 
-# 3. host port-forwards (Prometheus/Loki/Alertmanager/demo-app)
-./deploy/minikube/forwards.sh start
+# 3. host services: port-forwards, alert-relay, incident sync, dashboard
+#    Idempotent — re-run it any time; it leaves healthy services alone and
+#    restarts an alert-relay running a stale token.
+./deploy/demo-services.sh start
 
-# 4. alert-relay on the host (Alertmanager posts here)
-(cd alert-relay && go build -o ../bin/alert-relay .)
-./bin/alert-relay -addr 0.0.0.0:9099 \
-  -token "$(kubectl -n observability get secret relay-token -o jsonpath='{.data.token}' | base64 -d)" &
-
-# 5. NemoClaw sandbox on Token Factory (Nemotron 3 Ultra)
+# 4. NemoClaw sandbox on Token Factory (Nemotron 3 Ultra)
 ./spike/01-onboard.sh oncall
 
-# 6. deploy skills + memory + investigator into the sandbox
+# 5. deploy skills + memory + investigator into the sandbox
 ./deploy/deploy-to-sandbox.sh oncall
 
-# 7. wire the alert-intake cron (investigates + pages on new alerts)
+# 6. wire the alert-intake cron (investigates + pages on new alerts)
 bash deploy/setup-automations.sh   # reads .env itself
 ```
 
 Trigger a failure and watch the copilot work:
 
 ```bash
-kubectl -n demo port-forward svc/demo-app 18080:8080 &
-curl "localhost:18080/chaos?mode=error"
+curl "localhost:18080/chaos?mode=error"   # or latency | memory | cpu
 # ... within ~1-2 min: a Telegram brief with root cause + evidence,
 # and a report in memory/incidents/.
+curl "localhost:18080/chaos/stop"
 ```
+
+`./deploy/demo-services.sh status` shows the state of every host service;
+`stop` tears them down.
 
 ## Testing
 
 ```bash
+# unit + race (demo-app chaos state, alert-relay queue and auth)
+(cd demo-app && go test -race ./...)
+(cd alert-relay && go test -race ./...)
+
+# investigator against a real relay + stub Prometheus/Loki/inference
+./tests/investigate_test.sh
+
 # end-to-end: chaos -> alert -> relay -> evidence -> Nemotron RCA -> report
 RELAY_LOG=/tmp/opencode/relay-host.out COPILOT_ASSERT=1 ./tests/e2e/run.sh
 # scenarios: error, latency, memory (all assert the incident report content)
