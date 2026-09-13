@@ -70,7 +70,9 @@ start() {
   curl -sf -m 2 "localhost:$DASH_PORT/healthz" >/dev/null && echo "dashboard: http://localhost:$DASH_PORT" || echo "dashboard: FAILED"
 
   echo "== public tunnel (cloudflare) =="
-  CLOUDFLARED="${CLOUDFLARED:-/tmp/opencode/cloudflared}"
+  # Resolve via PATH by default; /tmp does not survive a reboot and the tunnel
+  # needs to outlive one.
+  CLOUDFLARED="${CLOUDFLARED:-cloudflared}"
   if command -v "$CLOUDFLARED" >/dev/null 2>&1; then
     if [ ! -f "$RUN/tunnel.pid" ] || ! kill -0 "$(cat "$RUN/tunnel.pid" 2>/dev/null)" 2>/dev/null; then
       setsid nohup "$CLOUDFLARED" tunnel --url "http://localhost:$DASH_PORT" --no-autoupdate \
