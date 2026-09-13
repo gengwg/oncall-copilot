@@ -13,6 +13,7 @@ import (
 	"os"
 	"runtime"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -24,8 +25,16 @@ var (
 	errTotal    atomic.Int64
 	latencyMode atomic.Bool
 	errorMode   atomic.Bool
-	memBallast  atomic.Value // []byte held to simulate a leak
-	cpuStop     atomic.Value // chan struct{}
+
+	// chaosMu guards the chaos state that is not a simple atomic. Without it,
+	// two concurrent /chaos calls can both pass the cpuStop nil check and
+	// double-close the channel, panicking the process.
+	chaosMu    sync.Mutex
+	memBallast [][]byte      // retained chunks simulating a leak; guarded by chaosMu
+	cpuStop    chan struct{} // nil when no burners are running; guarded by chaosMu
+
+	// ballastChunk is the per-hit allocation, var so tests can shrink it.
+	ballastChunk = 50 << 20
 )
 
 func main() {
@@ -80,24 +89,26 @@ func handleChaos(w http.ResponseWriter, r *http.Request) {
 	case "error":
 		errorMode.Store(true)
 	case "memory":
-		// Grow ~50MB per hit, retained.
-		b := make([]byte, 50<<20)
+		// Append, don't replace: replacing drops the previous chunk on the floor
+		// and heap stays flat, so the leak alert never sees a rising trend.
+		b := make([]byte, ballastChunk)
 		for i := range b {
 			b[i] = byte(i)
 		}
-		memBallast.Store(b)
-		slog.Warn("memory ballast allocated", "mb", 50)
+		chaosMu.Lock()
+		memBallast = append(memBallast, b)
+		heldMB := len(memBallast) * ballastChunk >> 20
+		chaosMu.Unlock()
+		slog.Warn("memory ballast allocated", "mb", ballastChunk>>20, "held_mb", heldMB)
 	case "cpu":
 		// Stop any existing burners first so re-enabling doesn't orphan them.
-		if s, ok := cpuStop.Load().(chan struct{}); ok && s != nil {
-			select {
-			case <-s:
-			default:
-				close(s)
-			}
+		chaosMu.Lock()
+		if cpuStop != nil {
+			close(cpuStop)
 		}
 		stop := make(chan struct{})
-		cpuStop.Store(stop)
+		cpuStop = stop
+		chaosMu.Unlock()
 		for i := 0; i < runtime.NumCPU(); i++ {
 			go func() {
 				for {
@@ -122,14 +133,17 @@ func handleChaos(w http.ResponseWriter, r *http.Request) {
 func handleChaosStop(w http.ResponseWriter, r *http.Request) {
 	latencyMode.Store(false)
 	errorMode.Store(false)
-	memBallast.Store([]byte{})
-	if s, ok := cpuStop.Load().(chan struct{}); ok && s != nil {
-		select {
-		case <-s:
-		default:
-			close(s)
-		}
+	chaosMu.Lock()
+	memBallast = nil
+	if cpuStop != nil {
+		close(cpuStop)
+		cpuStop = nil
 	}
+	chaosMu.Unlock()
+	// Dropping the reference does not lower HeapAlloc until a GC cycle runs, and
+	// the next forced one can be ~2min out. Collect now so the leak alert
+	// resolves promptly instead of idling above the threshold.
+	runtime.GC()
 	slog.Info("chaos cleared")
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(`{"chaos":"cleared"}`))
@@ -166,4 +180,3 @@ func btoi(b bool) int {
 	}
 	return 0
 }
-
