@@ -51,6 +51,88 @@ CLI install, Docker preflight, OpenShell gateway, sandbox build, and OpenClaw
 agent turns all worked on 26.04.1 (Node 24.19, Docker 29.7). Worth extending
 the validated matrix.
 
+### 9. `openshell forward start` reports failure on a forward that succeeded
+
+`openshell forward start --background 18789 oncall` exits 52 with
+`ssh exited before local forward listener opened on 127.0.0.1:18789`, but the
+forward is up. Running the same command with `-vv` shows ssh getting all the
+way through:
+
+```
+Local forwarding listening on 127.0.0.1 port 18789.
+setting up multiplex master socket
+forking to background
+Error: ssh exited before local forward listener opened on 127.0.0.1:18789
+```
+
+The readiness probe races ssh's fork to background and gives up too early.
+`ss -lnt` shows the listener, and `nemoclaw <sb> exec -- openclaw cron list`
+works immediately afterwards.
+
+Impact: worse than a cosmetic error. `nemoclaw <sb> recover` consumes the same
+probe, so it also reports failure and tells you to re-run the very command that
+just worked — a loop with no exit. Each retry leaves another ssh mux holding the
+port, which eventually produces a real `Port ... is not available` collision. The
+false negative manufactures the symptom it then blames (see item 1).
+
+Expected: poll the listener (or wait on the mux socket) before declaring
+failure, and treat an existing healthy forward as success.
+
+### 10. `rebuild` prints success, exits 1, and silently drops cron jobs
+
+`nemoclaw <sb> rebuild -y` ends with:
+
+```
+  Sandbox 'oncall' rebuilt successfully
+    Now running: OpenClaw v2026.7.1
+[exited with code 1]
+```
+
+The non-zero exit comes from post-rebuild verification (`gateway: HTTP 0`,
+`dashboard: port forward not working`), which is itself downstream of item 9.
+Scripts see only the exit code and cannot tell "rebuild failed" from "rebuild
+worked, verification probe is broken".
+
+Separately, the rebuild preserves `/sandbox/.openclaw/workspace` exactly as
+advertised (files, memory, skills all survived) but `openclaw cron list` comes
+back with 0 jobs. The workspace is restored; the job registry is not. Nothing in
+the output says so, so an unattended agent silently stops running.
+
+Expected: exit 0 when the rebuild succeeded and only verification was
+inconclusive; either restore cron jobs alongside workspace state or say plainly
+that they must be re-registered.
+
+### 11. Post-rebuild device scope upgrade has no discoverable approval path
+
+After a rebuild, every gateway call fails with:
+
+```
+GatewayClientRequestError: scope upgrade pending approval (requestId: ...)
+gateway closed (1008): pairing required: device is asking for more scopes than
+currently approved
+```
+
+The device is already paired as `operator`; the rebuild makes it request
+`operator.admin` on top of its existing `operator.pairing/read/write`. Nothing
+in `nemoclaw --help`, `openshell --help`, `openshell gateway --help`,
+`openshell sandbox --help`, or `openshell doctor` mentions approving it, and
+`openshell gateway login` refuses ("does not use edge or OIDC authentication").
+The `openshell term` TUI surfaces pending *network rules* on the sandbox row but
+not this pairing request.
+
+The command exists only inside the sandbox:
+
+```
+nemoclaw <sb> exec -- openclaw devices list
+nemoclaw <sb> exec -- openclaw devices approve <requestId>
+```
+
+which itself warns `Direct scope access failed; using local fallback` before
+succeeding.
+
+Expected: surface the pending request and its approval command in the error
+text, or in `nemoclaw <sb> recover` / the TUI alongside network rules.
+
 ## Token Factory
 
 ### 4. Reasoning models silently return `content: null` when max_tokens is small
@@ -102,3 +184,29 @@ This build's `openclaw cron add` has no `--stream-command`, no `--script`
 payloads, and no `--every <30s` (min 30000ms), though the current Automations
 docs describe all three. Version-pin the docs or gate features behind the
 runtime that introduced them.
+
+### 12. Channel delivery failure is only visible as a cron `error`
+
+A cron job with `--announce --channel telegram` whose delivery fails reports:
+
+```
+lastRunStatus: error
+lastDelivered: false
+lastDeliveryStatus: not-delivered
+```
+
+with no indication that the *channel* is the problem. The command itself exited
+0 and its stdout (the brief) is intact in `lastDiagnosticSummary`, so the run
+looks like a script failure. Ticks that produce no output (`NO_REPLY`) stay
+`ok`, so the error appears only on the ticks that matter.
+
+The actual cause was a revoked Telegram bot token: `getMe` returned
+`401 Unauthorized`, and `openclaw.json` held the unresolved placeholder
+`openshell:resolve:env:TELEGRAM_BOT_TOKEN`. `nemoclaw <sb> channels status`
+reported registration, policy coverage, allowed IDs and group policy all `ok`,
+with only `Bot API reachability: startup outcome not conclusive from the log
+window` hinting at it. `channels add telegram` does name it
+("Bot token was rejected by Telegram"), but only when re-enrolling.
+
+Expected: distinguish delivery failure from command failure in the run status,
+and have `channels status` perform the `getMe` check it already knows how to do.
