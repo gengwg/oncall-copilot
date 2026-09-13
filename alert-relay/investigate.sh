@@ -38,6 +38,18 @@ RUNBOOKS="$WORKSPACE/memory/runbooks"
 MODEL="${MODEL:-nvidia/Nemotron-3-Ultra-550b-a55b}"
 INFERENCE_URL="${INFERENCE_URL:-https://inference.local/v1/chat/completions}"
 
+# Prometheus returns NaN for 0/0 -- a ratio computed over a window with no
+# traffic -- and +Inf/-Inf for division by zero. Those are real result values,
+# not empty results, so neither the jq fallback nor ${x:-n/a} catches them and
+# "err_ratio=NaN" reaches the brief, where the model remarks on it instead of
+# the incident.
+norm() {
+  case "$1" in
+    ""|NaN|nan|+Inf|-Inf|Inf|inf) echo "n/a" ;;
+    *) echo "$1" ;;
+  esac
+}
+
 if [ -z "${NEBIUS_API_KEY:-}" ]; then
   echo "error: NEBIUS_API_KEY is unset; cannot reach $INFERENCE_URL" >&2
   echo "NO_REPLY"
@@ -132,11 +144,11 @@ case "$alertname" in
 esac
 # `jq -r '.value // "n/a"'` yields an empty string, not "n/a", when the query
 # returns no series at all (zero jq inputs -> zero output lines) — which is
-# exactly the ServiceDown case. Default here instead.
-up="${up:-n/a}"
-err_ratio="${err_ratio:-n/a}"
-heap="${heap:-n/a}"
-lat_mode="${lat_mode:-n/a}"
+# exactly the ServiceDown case. norm() also folds NaN/Inf to n/a.
+up=$(norm "$up")
+err_ratio=$(norm "$err_ratio")
+heap=$(norm "$heap")
+lat_mode=$(norm "$lat_mode")
 err_logs="${logs:-}"
 err_string=$(printf '%s' "$err_logs" | head -1 | sed 's/^[^\t]*\t//' | jq -r 'try (.err // .msg // empty) catch empty' 2>/dev/null | head -1)
 
