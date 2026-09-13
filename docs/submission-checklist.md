@@ -88,22 +88,21 @@ https://github.com/gengwg/oncall-copilot
 ## 6. Working demo URL (required, non-Physical tracks)
 
 ```
-<REGENERATE — the URL below is dead>
-https://explorer-music-pierre-clerk.trycloudflare.com
+https://thats-throat-vegetable-clip.trycloudflare.com
 ```
 
-> **Action required.** That quick-tunnel URL no longer resolves, and
-> `cloudflared` is not installed on this host, so `demo-services.sh start`
-> reports "cloudflared not found; dashboard is local-only". A required field
-> currently points at a dead link. Two ways to fix it:
+> Live as of 2026-09-13: returns HTTP 200 and lists real incident reports the
+> copilot filed. Served by `deploy/dashboard` through a Cloudflare quick-tunnel
+> started by `deploy/demo-services.sh start`.
 >
-> 1. Reinstall `cloudflared` to `/tmp/opencode/cloudflared`, run
->    `bash deploy/demo-services.sh start`, and read the new URL from
->    `demo-services.sh status`. Quick-tunnel URLs change on every restart, so
->    this needs re-checking before judging.
-> 2. Deploy the dashboard to Nebius Serverless Endpoints
->    (`deploy/dashboard/deploy.sh`) and use the managed URL. Durable, and the
->    rules require availability until judging ends.
+> **Quick-tunnel URLs are not stable.** A new one is minted every time the
+> tunnel restarts, so re-check this field before submitting and again before
+> judging: `bash deploy/demo-services.sh status` prints the current URL. The
+> tunnel also dies with the machine, and the rules require the project to stay
+> reachable until judging ends (~Dec 15).
+>
+> For something durable, deploy the dashboard to Nebius Serverless Endpoints
+> (`deploy/dashboard/deploy.sh`) and use the managed URL instead.
 
 ## 7. Demonstration video URL (required, <= 3 min, public YouTube)
 
