@@ -64,7 +64,11 @@ class H(BaseHTTPRequestHandler):
     def do_POST(self):
         self.rfile.read(int(self.headers.get('Content-Length', 0)))
         body = json.dumps({"choices": [{"message": {"content":
-            "ROOT CAUSE: Injected upstream dial timeouts are failing half of requests.\nACTION: Run /chaos/stop on demo-app."}}]}).encode()
+            "ROOT CAUSE: Injected upstream dial timeouts are failing roughly half of all requests reaching the service, "
+            "while the process itself remains entirely healthy, which rules out local resource exhaustion and points "
+            "squarely at an unreachable downstream dependency somewhere beyond the pod boundary.\n"
+            "ACTION: Run /chaos/stop on demo-app, then verify the Kubernetes service endpoints and NetworkPolicy rules "
+            "for every downstream dependency it calls."}}]}).encode()
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(body)))
@@ -203,6 +207,27 @@ case "$OUT" in
   *) ok "NaN folded to n/a in the brief" ;;
 esac
 check "NaN -> err_ratio reads n/a" "err_ratio=n/a" "$OUT"
+
+# 13. Long analysis must be clipped at a word boundary, not mid-word.
+curl -sf -m 2 -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$RELAY_PORT/alerts" >/dev/null
+post_alert DemoHighErrorRate
+run_investigate
+cause_line=$(printf '%s' "$OUT" | rg '^Likely cause:' | head -1)
+sugg_line=$(printf '%s' "$OUT" | rg '^Suggested:' | head -1)
+# The stub analysis exceeds both caps, so each field MUST be elided. head -c
+# cuts mid-word and adds no marker, so requiring the marker catches it.
+for pair in "cause:$cause_line" "action:$sugg_line"; do
+  name=${pair%%:*}; line=${pair#*:}
+  case "$line" in
+    *...)
+      stem=${line%...}
+      case "$stem" in
+        *" ") bad "$name clipped at a word boundary" "trailing space before elision: $line" ;;
+        *) ok "$name clipped at a word boundary" ;;
+      esac ;;
+    *) bad "$name clipped at a word boundary" "no elision marker; field was cut mid-word or not at all: $line" ;;
+  esac
+done
 
 echo
 echo "passed: $PASS  failed: $FAIL"
