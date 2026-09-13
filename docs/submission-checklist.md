@@ -60,9 +60,13 @@ When an alert fires, the copilot:
 
 ## Testing
 
-End-to-end chaos harness (`tests/e2e/run.sh`) injects failure modes
-(error, latency, memory) and asserts the copilot produces a root-cause
-incident report for each. 3/3 scenarios pass on a clean soak.
+Three layers. Go unit and race tests cover the chaos handlers and the relay
+queue and auth. An integration suite runs the real relay binary against stub
+Prometheus/Loki/inference and covers the failure modes that matter: token
+drift, an unreachable relay, batched alerts, path traversal in an alert label,
+and an unwritable lock. The end-to-end chaos harness (`tests/e2e/run.sh`)
+injects error, latency, and memory failures against the live stack and asserts
+a root-cause report for each. 3/3 scenarios pass; 36 tests in total.
 ```
 
 ## 4. Track (required category)
@@ -77,29 +81,41 @@ Personal AI Track
 https://github.com/gengwg/oncall-copilot
 ```
 
-> Action: make the repo public BEFORE submitting (see step A below).
+> Done: the repo is public. Latest release is `v1.1.0`.
 > Apache-2.0 LICENSE is at the repo root. README has setup + how Nebius/
 > Nemotron/Tavily were used.
 
 ## 6. Working demo URL (required, non-Physical tracks)
 
 ```
+<REGENERATE — the URL below is dead>
 https://explorer-music-pierre-clerk.trycloudflare.com
 ```
 
-> Note: this is a Cloudflare quick-tunnel. For judging, start services so the
-> URL stays alive: `bash deploy/demo-services.sh start`, then print the current
-> URL with `bash deploy/demo-services.sh status`. If it changed, update this
-> field. The demo shows the live incident feed produced by the copilot.
+> **Action required.** That quick-tunnel URL no longer resolves, and
+> `cloudflared` is not installed on this host, so `demo-services.sh start`
+> reports "cloudflared not found; dashboard is local-only". A required field
+> currently points at a dead link. Two ways to fix it:
+>
+> 1. Reinstall `cloudflared` to `/tmp/opencode/cloudflared`, run
+>    `bash deploy/demo-services.sh start`, and read the new URL from
+>    `demo-services.sh status`. Quick-tunnel URLs change on every restart, so
+>    this needs re-checking before judging.
+> 2. Deploy the dashboard to Nebius Serverless Endpoints
+>    (`deploy/dashboard/deploy.sh`) and use the managed URL. Durable, and the
+>    rules require availability until judging ends.
 
 ## 7. Demonstration video URL (required, <= 3 min, public YouTube)
 
 ```
-<your public YouTube URL for /tmp/opencode/video/final.mp4>
+<your public YouTube URL for docs/media/demo.mp4>
 ```
 
-> Video: 78s, h264+AAC, TTS narration naming Token Factory + Nemotron +
-> NemoClaw/OpenShell + Tavily. Upload as PUBLIC (not unlisted/private).
+> Video: `docs/media/demo.mp4`, 84s, 1920x1080 h264+AAC, piper TTS narration
+> naming Token Factory + Nemotron + NemoClaw/OpenShell + Tavily. A real
+> screencast of the live pipeline with Telegram Desktop on screen: chaos
+> injected, alert fires, the copilot investigates, the brief lands. Upload as
+> PUBLIC (not unlisted/private).
 
 ## 8. City (Builders & Brews City Winner Award)
 
@@ -109,11 +125,28 @@ https://explorer-music-pierre-clerk.trycloudflare.com
 
 ## 9. Feedback on Nebius Token Factory, AI Cloud, NVIDIA tools (bonus: Most Valuable Feedback)
 
-Paste the full contents of `docs/feedback.md` — 8 documented, reproducible
-findings (NemoClaw dashboard port reallocation deadlock, Tavily plugin build
-failure, reasoning-model null content on small max_tokens, unattended
-agent-turn tool-execution bug, code-mode API drift, secrets-in-job-spec, docs
-version drift, Ubuntu 26.04 validation gap).
+Paste the full contents of `docs/feedback.md` — 12 documented, reproducible
+findings, observed on `nemoclaw` CLI v0.0.109 (the only version published to
+npm; upstream was at tag v0.0.123, which the doc states up front).
+
+The original eight (dashboard port reallocation deadlock, Tavily
+plugin build failure, reasoning-model null content on small max_tokens,
+unattended agent-turn tool-execution bug, code-mode API drift,
+secrets-in-job-spec, docs version drift, Ubuntu 26.04 validation gap) plus four
+from operating the system through a sandbox rebuild:
+
+- `openshell forward start` reports failure on a forward that succeeded, and
+  `nemoclaw recover` inherits the same probe — a loop that tells you to re-run
+  the command that just worked, while each retry leaks a tunnel that eventually
+  causes the real port collision it then blames.
+- `rebuild` prints "rebuilt successfully", exits 1, and silently drops every
+  cron job while restoring the workspace.
+- The device scope upgrade a rebuild triggers can only be approved from inside
+  the sandbox, and no host CLI, error message, or TUI mentions it. (This one is
+  a confirmation of the open upstream issue NVIDIA/NemoClaw#10070, not a new
+  finding; the other three have no upstream match.)
+- A failed channel delivery surfaces only as a cron `error`, indistinguishable
+  from the command failing.
 
 ## 10. Significant updates during the submission period (pre-existing project?)
 
@@ -123,7 +156,7 @@ N/A — newly created during the submission period (Aug 26 – Oct 30, 2026).
 
 ---
 
-## Step A — make the repo public (do this first)
+## Step A — make the repo public (DONE — verified public)
 
 ```bash
 cd /home/gengwg/projects/nebius-hackathon
@@ -163,7 +196,7 @@ to leave buffer; you can update the Devpost project page after submitting.
 - **Best Use of Tavily** — Tavily is a runtime call inside the investigation
   loop (verified in incident reports).
 - **City Winner ($500)** — pick your city in field 8.
-- **Most Valuable Feedback** — `docs/feedback.md` (8 findings) is a strong
+- **Most Valuable Feedback** — `docs/feedback.md` (12 findings) is a strong
   candidate.
 
 One project can win one Overall/Track award + one Bonus award.
