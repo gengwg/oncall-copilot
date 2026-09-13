@@ -9,6 +9,16 @@
 # Required env: TELEGRAM_CHAT_ID, NEBIUS_API_KEY, TAVILY_API_KEY, RELAY_TOKEN.
 set -euo pipefail
 
+cd "$(dirname "$0")/.."
+# .env has no `export` lines, so sourcing it in the calling shell does not reach
+# us. Load it here (set -a exports what it defines); real env vars still win.
+if [ -f .env ]; then
+  set -a
+  # shellcheck disable=SC1091
+  source .env
+  set +a
+fi
+
 SB="${SB:-oncall}"
 TELEGRAM_CHAT_ID="${TELEGRAM_CHAT_ID:?set TELEGRAM_CHAT_ID}"
 NEBIUS_API_KEY="${NEBIUS_API_KEY:?set NEBIUS_API_KEY}"
@@ -29,6 +39,10 @@ WORKSPACE=/sandbox/.openclaw/workspace
 # Idempotent re-runs: drop any prior alert-intake job (agentTurn or command).
 nemoclaw "$SB" exec -- sh -c "openclaw cron list --json 2>/dev/null | python3 -c 'import sys,json; [print(x[\"id\"]) for x in json.load(sys.stdin)[\"jobs\"] if x[\"name\"]==\"alert-intake\"]' | while read -r id; do openclaw cron rm \"\$id\" 2>/dev/null; done" >/dev/null 2>&1 || true
 
+# The timeout must exceed the script's worst case (Nemotron -m 150 + Tavily
+# -m 20 + the Prom/Loki round trips), or the cron kills the run after the queue
+# has been drained but before the report is written — losing the alert.
+#
 # Note: --command-env stores secrets in the job spec (see docs/feedback.md #7).
 # Acceptable for a local demo; a production deployment should use the OpenClaw
 # secrets store instead.
@@ -39,7 +53,7 @@ nemoclaw "$SB" exec -- openclaw cron add \
   --command-env "NEBIUS_API_KEY=$NEBIUS_API_KEY" \
   --command-env "TAVILY_API_KEY=$TAVILY_API_KEY" \
   --command-env "RELAY_TOKEN=$RELAY_TOKEN" \
-  --timeout-seconds 180 \
+  --timeout-seconds 300 \
   --session isolated \
   --announce \
   --channel telegram \

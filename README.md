@@ -86,8 +86,9 @@ cp .env.example .env   # fill in NEBIUS_API_KEY, TAVILY_API_KEY,
 ./deploy/minikube/forwards.sh start
 
 # 4. alert-relay on the host (Alertmanager posts here)
-cd alert-relay && go build -o ../bin/alert-relay . && cd ..
-./bin/alert-relay -addr 0.0.0.0:9099 -token <relay-token> &
+(cd alert-relay && go build -o ../bin/alert-relay .)
+./bin/alert-relay -addr 0.0.0.0:9099 \
+  -token "$(kubectl -n observability get secret relay-token -o jsonpath='{.data.token}' | base64 -d)" &
 
 # 5. NemoClaw sandbox on Token Factory (Nemotron 3 Ultra)
 ./spike/01-onboard.sh oncall
@@ -96,7 +97,7 @@ cd alert-relay && go build -o ../bin/alert-relay . && cd ..
 ./deploy/deploy-to-sandbox.sh oncall
 
 # 7. wire the alert-intake cron (investigates + pages on new alerts)
-source .env && TELEGRAM_CHAT_ID=$TELEGRAM_CHAT_ID bash deploy/setup-automations.sh
+bash deploy/setup-automations.sh   # reads .env itself
 ```
 
 Trigger a failure and watch the copilot work:

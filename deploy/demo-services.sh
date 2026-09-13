@@ -21,14 +21,36 @@ start() {
   deploy/minikube/forwards.sh start
 
   echo "== alert-relay =="
-  if ! curl -sf -m 2 http://172.18.0.1:9099/healthz >/dev/null 2>&1; then
+  # An empty -token disables auth entirely on a relay bound to 0.0.0.0, so a
+  # missing secret must stop us rather than silently open the queue.
+  token=$(relay_token || true)
+  if [ -z "$token" ]; then
+    echo "relay: FAILED (no relay-token secret in the observability namespace; is minikube up?)" >&2
+    return 1
+  fi
+  # /healthz is unauthenticated and always 200s, so it cannot tell a healthy
+  # relay from one still running a stale token. Probe with the token we intend
+  # to use and restart on mismatch, otherwise the cron 401s against it forever.
+  if ! curl -sf -m 2 -H "Authorization: Bearer $token" http://172.18.0.1:9099/authcheck >/dev/null 2>&1; then
+    # Match on program name, not path: a relay left over from an earlier run or
+    # started by hand lives somewhere else and would keep 9099 bound.
+    [ -f "$RUN/relay.pid" ] && kill "$(cat "$RUN/relay.pid")" 2>/dev/null
+    pkill -x alert-relay 2>/dev/null
+    for _ in $(seq 30); do
+      ss -lnt 2>/dev/null | grep -q ':9099 ' || break
+      sleep 0.2
+    done
     (cd alert-relay && CGO_ENABLED=0 go build -ldflags="-s -w" -o "$RUN/alert-relay" .)
-    setsid nohup "$RUN/alert-relay" -addr 0.0.0.0:9099 -token "$(relay_token)" \
+    setsid nohup "$RUN/alert-relay" -addr 0.0.0.0:9099 -token "$token" \
       > "$RELAY_LOG" 2>&1 < /dev/null &
     echo $! > "$RUN/relay.pid"
     sleep 2
   fi
-  curl -sf -m 2 http://172.18.0.1:9099/healthz >/dev/null && echo "relay: ok" || echo "relay: FAILED"
+  if curl -sf -m 2 -H "Authorization: Bearer $token" http://172.18.0.1:9099/authcheck >/dev/null; then
+    echo "relay: ok"
+  else
+    echo "relay: FAILED (see $RELAY_LOG)"
+  fi
 
   echo "== incident sync =="
   if [ ! -f "$RUN/sync.pid" ] || ! kill -0 "$(cat "$RUN/sync.pid" 2>/dev/null)" 2>/dev/null; then
@@ -73,10 +95,16 @@ stop() {
 
 status() {
   echo "forwards:"; curl -sf -m 2 localhost:19090/-/healthy >/dev/null && echo "  prom ok" || echo "  prom DOWN"
-  echo "relay:"; curl -sf -m 2 http://172.18.0.1:9099/healthz >/dev/null && echo "  ok" || echo "  DOWN"
+  echo "relay:"
+  if ! curl -sf -m 2 http://172.18.0.1:9099/healthz >/dev/null; then
+    echo "  DOWN"
+  elif curl -sf -m 2 -H "Authorization: Bearer $(relay_token)" http://172.18.0.1:9099/authcheck >/dev/null; then
+    echo "  ok"
+  else
+    echo "  UP but token mismatch (cron drain will 401; run '$0 start' to restart it)"
+  fi
   echo "dashboard:"; curl -sf -m 2 "localhost:$DASH_PORT/healthz" >/dev/null && echo "  http://localhost:$DASH_PORT" || echo "  DOWN"
   [ -f "$RUN/tunnel.log" ] && echo "tunnel: $(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$RUN/tunnel.log" | head -1)"
-  echo "cron:"; nemoclaw oncall exec -- sh -c 'openclaw cron list --json 2>/dev/null | python3 -c "import sys,json; j=json.load(sys.stdin)[\"jobs\"][0]; print(\"  \", j[\"name\"], j[\"state\"].get(\"lastRunStatus\"))"' 2>/dev/null | grep -v "Active gateway"
   echo "cron:"; nemoclaw oncall exec -- sh -c 'openclaw cron list --json 2>/dev/null | python3 -c "import sys,json; j=json.load(sys.stdin)[\"jobs\"][0]; print(\"  \", j[\"name\"], j[\"state\"].get(\"lastRunStatus\"))"' 2>/dev/null | grep -v "Active gateway"
 }
 

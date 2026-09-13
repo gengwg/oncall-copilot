@@ -17,8 +17,8 @@ import (
 
 // Alertmanager v2 webhook payload (subset).
 type webhookPayload struct {
-	Status  string `json:"status"`
-	Alerts  []struct {
+	Status string `json:"status"`
+	Alerts []struct {
 		Status      string            `json:"status"`
 		Labels      map[string]string `json:"labels"`
 		Annotations map[string]string `json:"annotations"`
@@ -52,6 +52,10 @@ func main() {
 	http.HandleFunc("POST /alert", handleAlert)
 	http.HandleFunc("GET /alerts", auth(handleDrain))
 	http.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	// /authcheck is /alerts' auth without the drain, so a supervisor can tell
+	// "relay is up" from "relay is up but running a different token" without
+	// destroying the queue.
+	http.HandleFunc("GET /authcheck", auth(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }))
 	slog.Info("alert-relay listening", "addr", *addr)
 	if err := http.ListenAndServe(*addr, nil); err != nil {
 		slog.Error("server exited", "err", err)

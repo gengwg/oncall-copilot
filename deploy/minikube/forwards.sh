@@ -35,7 +35,10 @@ stop() {
   # Kill orphaned kubectl port-forward children from previous runs (wrapper
   # kill doesn't propagate to the port-forward child). Anchored to this
   # project's namespaces so we don't kill unrelated forwards on a shared box.
-  pkill -f 'kubectl -n (observability|demo) port-forward' 2>/dev/null
+  # Match the supervising wrapper too, not just the kubectl child: the wrapper's
+  # argv carries the literal quotes from the bash -c above, and killing only the
+  # child lets the wrapper respawn it 2s later with the ports still bound.
+  pkill -f "kubectl -n '?(observability|demo)'? port-forward" 2>/dev/null
   sleep 1
 }
 
