@@ -1,43 +1,43 @@
 # Video pipeline (as built)
 
-Headless-host approach: no screen recording (the desktop has no visible
-terminal window). The video is composited from:
+Real screencast plus rendered cards and piper narration. The earlier version of
+this doc described a headless slideshow of static PNGs; that was a workaround
+for not having screen capture, and it showed — the Telegram UI never appeared.
 
-1. **Intro slide** — rendered PNG from PIL (project name + stack callouts)
-2. **Live dashboard** — headless chromium screenshot of the public tunnel URL
-   (the Cloudflare quick-tunnel serving the local incident feed)
-3. **Grafana** — headless chromium shot of the embedded explore
-4. **Terminal output** — the e2e log rendered to PNG via PIL
+## Capture
 
-plus **piper TTS narration** (`docs/narrate.sh`, en_US-lessac-medium voice).
+The host is GNOME on Wayland, so `grim` (no `wlr-screencopy`) and `ffmpeg
+-f x11grab` (captures a black XWayland root) both fail. GNOME's built-in
+recorder works and has no length cap on Shell 50:
+
+1. Arrange the screen: terminal on the left with a large font, Telegram Desktop
+   on the right showing the copilot chat. Close anything private — the capture
+   takes the whole screen.
+2. `Ctrl+Alt+Shift+R` to start.
+3. Run `./docs/demo-drive.sh` — it paces the real pipeline for camera: system
+   check, chaos injection, the alert firing with elapsed timestamps, the
+   investigation, the delivered brief, then clears the chaos. About 50s.
+4. `Ctrl+Alt+Shift+R` to stop. Saves to `~/Videos/Screencasts/`.
 
 ## Build
 
 ```bash
-# 1. services up + tunnel
-bash deploy/demo-services.sh start
-
-# 2. narration segments -> full.wav (data-dir holds the voice model)
-bash docs/narrate.sh
-
-# 3. composite
-ffmpeg -loop 1 -t 18 -i /tmp/opencode/video/intro.png \
-       -loop 1 -t 14 -i /tmp/opencode/video/dash.png \
-       -loop 1 -t 14 -i /tmp/opencode/video/grafana.png \
-       -loop 1 -t 32 -i /tmp/opencode/video/term.png \
-       -i /tmp/opencode/video/narration/full.wav \
-  -filter_complex "[0:v]scale=1920:1080[v0];[1:v]scale=1920:1080[v1];\
-[2:v]scale=1920:1080[v2];[3:v]scale=1920:1080[v3];\
-[v0][v1][v2][v3]concat=n=4:v=1:a=0[v]" \
-  -map "[v]" -map "4:a" -shortest \
-  -c:v libx264 -c:a aac /tmp/opencode/video/final.mp4
+./docs/narrate-demo.sh                    # piper TTS -> /tmp/opencode/video/v3/narr
+./docs/build-video.sh ~/Videos/Screencasts/<file>.mp4 docs/media/demo.mp4
 ```
+
+`build-video.sh` renders the cards (`docs/make-cards.py`), scales the screencast
+to 1920x1080, concatenates title + stack + footage + end card, and places each
+narration segment at an absolute timestamp so the speech lands on the matching
+on-screen event rather than just playing end to end.
+
+Re-recording changes those timings. The anchors are the `A1`-`A7` variables in
+`build-video.sh`, expressed as offsets from the footage start; check them
+against the new take's elapsed markers before rebuilding.
 
 ## Rules checklist
 
-- duration 78s (< 3:00) ✓
-- narration names Token Factory + Nemotron + NemoClaw/OpenShell + Tavily ✓
-- audio is piper TTS only (no copyrighted/third-party music) ✓
-- content shows the project functioning (live feed + sequences) ✓
-
-Upload `/tmp/opencode/video/final.mp4` to YouTube as PUBLIC.
+- duration 84s (< 3:00)
+- narration names Token Factory, Nemotron, NemoClaw/OpenShell, Tavily
+- audio is piper TTS only (no third-party music)
+- shows the project working end to end, including the Telegram page
