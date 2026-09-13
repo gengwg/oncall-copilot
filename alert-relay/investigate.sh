@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Deterministic incident investigator. Runs as an OpenClaw command payload.
-#   1. Drains the alert-relay queue, takes the first firing alert
+#   1. Drains the alert-relay queue, investigates every firing alert in it
 #   2. Runs real PromQL/LogQL evidence collection (scenario-appropriate)
 #   3. For unfamiliar error strings, enriches with a Tavily web search
 #   4. Asks Nemotron (via the sandbox inference route) to analyze
@@ -12,18 +12,20 @@ set -uo pipefail
 
 # The 30s cadence can overlap a slow run (Nemotron -m 150 + Tavily -m 20).
 # Serialize with a lock so two runs never double-drain or clobber one report.
-# If flock is absent, proceed unlocked with a visible warning rather than
-# silently NO_REPLY-ing every tick (flock missing -> exit 127 -> silent outage).
-LOCKFILE="${WORKSPACE:-/sandbox/.openclaw/workspace}/.investigate.lock"
+# If the lock is unavailable, proceed unlocked with a visible warning rather
+# than silently NO_REPLY-ing every tick.
+WORKSPACE="${WORKSPACE:-/sandbox/.openclaw/workspace}"
+LOCKFILE="$WORKSPACE/.investigate.lock"
 mkdir -p "$(dirname "$LOCKFILE")" 2>/dev/null || true
-if command -v flock >/dev/null 2>&1; then
-  exec 9>"$LOCKFILE" 2>/dev/null || true
+# Open the lock file before flock: a failed `exec 9>` does NOT abort the script,
+# so an unguarded redirect leaves fd 9 closed and flock then fails with "Bad
+# file descriptor" -> NO_REPLY on every tick, i.e. a silent outage.
+if command -v flock >/dev/null 2>&1 && : >>"$LOCKFILE" 2>/dev/null && exec 9>>"$LOCKFILE"; then
   flock -n 9 || { echo "NO_REPLY"; exit 0; }
 else
-  echo "warn: flock not found; running unlocked" >&2
+  echo "warn: cannot lock $LOCKFILE (flock missing or unwritable); running unlocked" >&2
 fi
 
-WORKSPACE=/sandbox/.openclaw/workspace
 export PROMETHEUS_URL="${PROMETHEUS_URL:-http://172.18.0.1:19090}"
 export LOKI_URL="${LOKI_URL:-http://172.18.0.1:13100}"
 RELAY="${ALERT_RELAY_URL:-http://172.18.0.1:9099}"
@@ -36,26 +38,54 @@ RUNBOOKS="$WORKSPACE/memory/runbooks"
 MODEL="${MODEL:-nvidia/Nemotron-3-Ultra-550b-a55b}"
 INFERENCE_URL="${INFERENCE_URL:-https://inference.local/v1/chat/completions}"
 
+if [ -z "${NEBIUS_API_KEY:-}" ]; then
+  echo "error: NEBIUS_API_KEY is unset; cannot reach $INFERENCE_URL" >&2
+  echo "NO_REPLY"
+  exit 1
+fi
+
 if [ $# -eq 0 ]; then
   auth_header=()
   [ -n "$RELAY_TOKEN" ] && auth_header=(-H "Authorization: Bearer $RELAY_TOKEN")
-  batch=$(curl -sf -m 8 "${auth_header[@]}" "$RELAY/alerts" 2>/dev/null || echo "[]")
-  alert_json=$(printf '%s' "$batch" | jq -c '[.[] | select(.status=="firing")][0] // empty' 2>/dev/null)
-  [ -z "$alert_json" ] && { echo "NO_REPLY"; exit 0; }
+  body=$(mktemp)
+  # Distinguish "relay said no alerts" from "relay refused us". Without the
+  # status check a 401 (token drift) looks exactly like an empty queue, so
+  # alerts pile up in the relay and nothing is ever investigated or paged.
+  code=$(curl -s -m 8 -o "$body" -w '%{http_code}' "${auth_header[@]}" "$RELAY/alerts" 2>/dev/null) || true
+  code="${code:-000}"
+  batch=$(cat "$body"); rm -f "$body"
+  if [ "$code" != "200" ]; then
+    case "$code" in
+      000) echo "error: alert-relay unreachable at $RELAY/alerts" >&2 ;;
+      401) echo "error: alert-relay rejected our RELAY_TOKEN (HTTP 401) — token drift between the relay and this cron" >&2 ;;
+      *)   echo "error: alert-relay drain failed (HTTP $code) at $RELAY/alerts" >&2 ;;
+    esac
+    echo "NO_REPLY"
+    exit 1
+  fi
+  # The drain is destructive: the relay clears its queue on GET. Investigate
+  # every firing alert in the batch or the rest are lost.
+  mapfile -t alerts < <(printf '%s' "$batch" | jq -c '.[] | select(.status=="firing")' 2>/dev/null)
+  [ "${#alerts[@]}" -eq 0 ] && { echo "NO_REPLY"; exit 0; }
 else
-  alert_json="$1"
+  alerts=("$1")
 fi
 
+investigate_one() {
+alert_json="$1"
 alertname=$(printf '%s' "$alert_json" | jq -r '.alertname // "Unknown"')
 service=$(printf '%s' "$alert_json" | jq -r '.service // "demo-app"')
 severity=$(printf '%s' "$alert_json" | jq -r '.severity // "warning"')
 summary=$(printf '%s' "$alert_json" | jq -r '.summary // ""')
 status=$(printf '%s' "$alert_json" | jq -r '.status // "firing"')
 date=$(date -u +%Y-%m-%d)
-report="$INCIDENTS/$date-$alertname.md"
+# Sanitize: alertname is an untrusted label and lands in a path. A '/' or '..'
+# would write outside $INCIDENTS.
+alert_slug=$(printf '%s' "$alertname" | tr -c 'A-Za-z0-9_-' '_')
+report="$INCIDENTS/$date-$alert_slug.md"
 mkdir -p "$INCIDENTS"
 
-[ "$status" != "firing" ] && { echo "NO_REPLY"; exit 0; }
+[ "$status" != "firing" ] && return 1
 
 runbook=$(cat "$RUNBOOKS/$service.md" 2>/dev/null || echo "no runbook")
 
@@ -72,6 +102,8 @@ if [ -n "$starts_at" ]; then
   [ "$lookback" -lt 5 ] && lookback=5
 fi
 
+# Reset per-alert so evidence from the previous alert in the batch can't leak in.
+heap_trend=""
 # Always-collected baselines.
 up=$($PROM instant "up{job=\"$service\"}" 2>/dev/null | jq -r '.value // "n/a"' | head -1)
 err_ratio=$($PROM instant 'sum(rate(demo_errors_total[5m])) / sum(rate(demo_requests_total[5m]))' 2>/dev/null | jq -r '.value // "n/a"' | head -1)
@@ -98,6 +130,13 @@ case "$alertname" in
     logs=$($LOGQ tail "{service=\"$service\"} |= \"ERROR\"" "$lookback" 3 2>/dev/null | head -3)
     ;;
 esac
+# `jq -r '.value // "n/a"'` yields an empty string, not "n/a", when the query
+# returns no series at all (zero jq inputs -> zero output lines) — which is
+# exactly the ServiceDown case. Default here instead.
+up="${up:-n/a}"
+err_ratio="${err_ratio:-n/a}"
+heap="${heap:-n/a}"
+lat_mode="${lat_mode:-n/a}"
 err_logs="${logs:-}"
 err_string=$(printf '%s' "$err_logs" | head -1 | sed 's/^[^\t]*\t//' | jq -r 'try (.err // .msg // empty) catch empty' 2>/dev/null | head -1)
 
@@ -172,3 +211,12 @@ action=$(printf '%s' "$analysis" | sed -n 's/^ACTION: *//p' | head -1)
 printf 'ALERT: %s (%s)\nService: %s\nLikely cause: %s\nEvidence: err_ratio=%s heap=%s latency_mode=%s\nSuggested: %s\n' \
   "$alertname" "$severity" "$service" "$(printf '%s' "$rootcause" | head -c 200)" \
   "$err_ratio" "$heap" "$lat_mode" "$(printf '%s' "$action" | head -c 120)"
+}
+
+briefed=0
+for a in "${alerts[@]}"; do
+  [ -n "$a" ] || continue
+  investigate_one "$a" && briefed=$((briefed + 1))
+done
+[ "$briefed" -eq 0 ] && echo "NO_REPLY"
+exit 0
