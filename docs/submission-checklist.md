@@ -101,8 +101,14 @@ https://thats-throat-vegetable-clip.trycloudflare.com
 > tunnel also dies with the machine, and the rules require the project to stay
 > reachable until judging ends (~Dec 15).
 >
-> For something durable, deploy the dashboard to Nebius Serverless Endpoints
-> (`deploy/dashboard/deploy.sh`) and use the managed URL instead.
+> The durable alternative, `deploy/dashboard/deploy.sh` to Nebius Serverless
+> Endpoints, is **blocked on account permissions** as of 2026-09-13. Reads
+> succeed (subnets, registries, endpoints all list) but creating a container
+> registry in `project-u00nmrg7kc00748cm51t86` returns
+> `PermissionDenied: Service registry error Auth`. The script is fine; it gets
+> through project detection and fails on the first write. Once billing or the
+> registry/AI-endpoint editor roles are enabled, re-run it and swap this field
+> for the managed URL.
 
 ## 7. Demonstration video URL (required, <= 3 min, public YouTube)
 
@@ -177,9 +183,11 @@ judging period ends (~Dec 15). Two options:
 1. **Keep this machine on** with `bash deploy/demo-services.sh start` and the
    Cloudflare tunnel alive. Re-print the URL (`demo-services.sh status`) and
    keep the Devpost field in sync if it changes.
-2. **More durable:** deploy the dashboard to Nebius Serverless Endpoints once
-   the AI Cloud billing unlocks (`deploy/dashboard/deploy.sh`), then replace
-   the Devpost demo URL with the managed `https://...` endpoint URL.
+2. **More durable:** deploy the dashboard to Nebius Serverless Endpoints
+   (`deploy/dashboard/deploy.sh`), then replace the Devpost demo URL with the
+   managed `https://...` endpoint URL. Attempted 2026-09-13 and blocked:
+   registry creation returns `PermissionDenied`, so the account needs billing
+   or the registry/AI-endpoint editor roles first.
 
 ## Step C — submit early
 
