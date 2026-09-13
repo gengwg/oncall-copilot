@@ -41,6 +41,8 @@ cat > "$TMP/ws/skills/promql-query/scripts/query.sh" <<'EOF'
 # Stub: emits one result object per query, or nothing when STUB_PROM_EMPTY=1
 # (which is what a real instant query returns when the target is gone).
 [ "${STUB_PROM_EMPTY:-0}" = "1" ] && exit 0
+# 0/0 over a window with no traffic: Prometheus returns a real NaN sample.
+[ "${STUB_PROM_NAN:-0}" = "1" ] && { echo '{"value":"NaN"}'; exit 0; }
 case "$2" in
   *heap*) echo '{"value":"104857600"}' ;;
   *latency_mode*) echo '{"value":"1"}' ;;
@@ -190,6 +192,17 @@ curl -sf -m 2 -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$RELAY_PORT/al
 post_alert DemoServiceDown
 run_investigate STUB_PROM_EMPTY=1
 check "no series -> evidence reads n/a" "err_ratio=n/a" "$OUT"
+
+# 12. A ratio over a window with no traffic is NaN, which is a real sample and
+#     not an empty result, so it used to reach the Telegram brief verbatim.
+curl -sf -m 2 -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$RELAY_PORT/alerts" >/dev/null
+post_alert DemoHighErrorRate
+run_investigate STUB_PROM_NAN=1
+case "$OUT" in
+  *NaN*) bad "NaN folded to n/a in the brief" "brief still carries NaN: $OUT" ;;
+  *) ok "NaN folded to n/a in the brief" ;;
+esac
+check "NaN -> err_ratio reads n/a" "err_ratio=n/a" "$OUT"
 
 echo
 echo "passed: $PASS  failed: $FAIL"
