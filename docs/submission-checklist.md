@@ -155,6 +155,10 @@ from operating the system through a sandbox rebuild:
   the sandbox, and no host CLI, error message, or TUI mentions it. (This one is
   a confirmation of the open upstream issue NVIDIA/NemoClaw#10070, not a new
   finding; the other three have no upstream match.)
+- Upgrading v0.0.109 -> v0.0.123 destroyed a working sandbox (a rotated
+  credential no longer matched its recorded binding), left a route reservation
+  that blocked every documented recovery, and produced backups the new version
+  refused to restore.
 - The installer defaults to `lkg`, a moving tag that trails main, and nothing
   ever reports that it moved — so the version you get depends on the day you
   installed, and this host sat fourteen releases behind without a signal. The

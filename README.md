@@ -64,7 +64,10 @@ demo-app (/chaos) -> Prometheus alert -> Alertmanager --webhook--> alert-relay
 - `memory/` — agent knowledge layer (runbooks, incident reports)
 - `deploy/minikube/` — observability stack (Prometheus, Alertmanager, Loki, Grafana, Alloy)
 - `deploy/dashboard/` — incident dashboard (Nebius Serverless)
-- `deploy/policy-local-observability.yaml` — sandbox network policy for Prom/Loki
+- `deploy/policy-local-observability.yaml` — sandbox network policy for Prom/Loki.
+  Apply with `nemoclaw <sb> policy add --from-file deploy/policy-local-observability.yaml
+  --trusted-private-host 172.18.0.1 --yes`; NemoClaw v0.0.123+ refuses RFC1918
+  endpoints without that explicit trust flag
 - `tests/e2e/` — chaos-scenario end-to-end harness
 - `spike/` — Phase 0 verification (Token Factory, NemoClaw onboarding)
 - `docs/` — architecture, feedback, plan
