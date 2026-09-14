@@ -20,6 +20,11 @@ echo "== skills =="
 for f in $(find skills -type f); do
   put "$f" "$WORKSPACE/$f"
 done
+# put() writes through base64, which does not carry the executable bit, and the
+# investigator shells out to these. Without this they fail with "Permission
+# denied", every evidence field reads n/a, and the copilot pages with a brief
+# built on nothing.
+nemoclaw "$SB" exec -- sh -c "chmod +x $WORKSPACE/skills/*/scripts/*.sh" >/dev/null
 
 echo "== memory =="
 for f in $(find memory -type f); do
