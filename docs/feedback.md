@@ -3,10 +3,10 @@
 Collected while building the on-call copilot. Each item is reproducible.
 This doubles as hackathon "Most Valuable Feedback" submission material.
 
-**Observed on `nemoclaw` CLI v0.0.109** (npm `nemoclaw@0.1.0`, the only version
-published to npm at the time of writing). Upstream `NVIDIA/NemoClaw` was at tag
-`v0.0.123`, so some of these may already be fixed in builds not published to
-npm. Where an upstream issue already tracks a finding, it is cited inline.
+**Observed on `nemoclaw` CLI v0.0.109**, with upstream `NVIDIA/NemoClaw` at tag
+`v0.0.123`, so some of these may already be fixed in newer builds. That gap was
+not visible from inside the tooling — see item 13. Where an upstream issue
+already tracks a finding, it is cited inline.
 
 ## NemoClaw (v0.0.109, OpenShell 0.0.101, Ubuntu 26.04 host, Docker 29)
 
@@ -158,6 +158,34 @@ succeeding.
 
 Expected: surface the pending request and its approval command in the error
 text, or in `nemoclaw <sb> recover` / the TUI alongside network rules.
+
+### 13. Version numbers disagree, so there is no way to tell you are behind
+
+Three different numbers describe the same install:
+
+| Source | Value |
+|---|---|
+| `nemoclaw --version` | `v0.0.109` |
+| `~/.nemoclaw/source/package.json` | `0.1.0` |
+| `git -C ~/.nemoclaw/source describe --tags` | `v0.0.109` |
+| `npm view nemoclaw version` | `0.1.0` |
+| Latest upstream tag | `v0.0.123` |
+
+The installer leaves a git checkout, so the tag and the CLI agree at `v0.0.109`.
+But `package.json` carries `0.1.0`, an unrelated number, and that is also the
+only version ever published to npm — once, on 2026-03-15, and never updated
+since. Six months of releases (`v0.0.110` through `v0.0.123`) exist only as
+tags.
+
+The failure mode: a user checks `npm view nemoclaw version`, sees `0.1.0`,
+compares it to the `0.1.0` in their own `package.json`, and concludes they are
+current. They are fourteen tags behind, and nothing in the CLI says so. Every
+other finding in this document was observed in that state, which is worth
+knowing when triaging them: item 11 in particular is already fixed upstream in
+`v0.0.114`, and I had no signal that a newer build existed.
+
+Expected: publish releases to npm or drop the package, make `package.json`
+carry the release version, and have the CLI say when a newer tag exists.
 
 ## Token Factory
 

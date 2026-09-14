@@ -135,9 +135,9 @@ San Francisco
 
 ## 9. Feedback on Nebius Token Factory, AI Cloud, NVIDIA tools (bonus: Most Valuable Feedback)
 
-Paste the full contents of `docs/feedback.md` — 12 documented, reproducible
-findings, observed on `nemoclaw` CLI v0.0.109 (the only version published to
-npm; upstream was at tag v0.0.123, which the doc states up front).
+Paste the full contents of `docs/feedback.md` — 13 documented, reproducible
+findings, observed on `nemoclaw` CLI v0.0.109 against upstream tag v0.0.123 —
+a gap the tooling gives no signal about, which is itself finding 13.
 
 The original eight (dashboard port reallocation deadlock, Tavily
 plugin build failure, reasoning-model null content on small max_tokens,
@@ -155,6 +155,9 @@ from operating the system through a sandbox rebuild:
   the sandbox, and no host CLI, error message, or TUI mentions it. (This one is
   a confirmation of the open upstream issue NVIDIA/NemoClaw#10070, not a new
   finding; the other three have no upstream match.)
+- Three different version numbers describe the same install, and the one npm
+  publishes has not changed since March, so there is no way to tell you are
+  fourteen tags behind.
 - A failed channel delivery surfaces only as a cron `error`, indistinguishable
   from the command failing.
 
@@ -207,7 +210,7 @@ to leave buffer; you can update the Devpost project page after submitting.
 - **Best Use of Tavily** — Tavily is a runtime call inside the investigation
   loop (verified in incident reports).
 - **City Winner ($500)** — pick your city in field 8.
-- **Most Valuable Feedback** — `docs/feedback.md` (12 findings) is a strong
+- **Most Valuable Feedback** — `docs/feedback.md` (13 findings) is a strong
   candidate.
 
 One project can win one Overall/Track award + one Bonus award.
