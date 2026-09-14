@@ -119,13 +119,23 @@ that they must be re-registered.
 
 ### 11. Post-rebuild device scope upgrade has no discoverable approval path
 
-**Already tracked upstream as [NVIDIA/NemoClaw#10070][i10070] (open).** That
-issue reports the same gap and notes that the fix (#9853, "name the openclaw
-devices review path on a permission scope upgrade") shipped in `v0.0.114` yet
-still does not emit. This report is a confirmation on `v0.0.109`, which predates
-that fix, so it adds a second platform and the exact recovery sequence rather
-than a new finding. The related hang after approval is
-[NVIDIA/NemoClaw#11422][i11422].
+**Fixed in `v0.0.123` — verified.** Tracked upstream as
+[NVIDIA/NemoClaw#10070][i10070], which reported that the fix (#9853, "name the
+openclaw devices review path on a permission scope upgrade") shipped in
+`v0.0.114` yet still did not emit. After upgrading this host to `v0.0.123` and
+hitting the same scope upgrade, the CLI now prints the remedy:
+
+```
+nemoclaw: a device scope upgrade is waiting for approval inside sandbox 'oncall'.
+  Review pending requests: nemoclaw oncall exec -- openclaw devices list
+  Approve the one you recognize, after checking its device and requested scopes:
+                           nemoclaw oncall exec -- openclaw devices approve <requestId>
+```
+
+The description below is what `v0.0.109` did, kept for the record. The related
+hang after approval, [NVIDIA/NemoClaw#11422][i11422], still reproduces:
+`openclaw devices approve` prints "Direct scope access failed; using local
+fallback" before succeeding.
 
 [i10070]: https://github.com/NVIDIA/NemoClaw/issues/10070
 [i11422]: https://github.com/NVIDIA/NemoClaw/issues/11422
@@ -201,6 +211,33 @@ whether they are current gets a confident answer from a package NVIDIA does not
 control. #8377 proposes `@nvidia/nemoclaw` precisely because the unscoped name
 is unavailable; until that ships, the name is a supply-chain footgun worth
 claiming or documenting.
+
+**What upgrading actually cost.** Running `nemoclaw update -y` from `v0.0.109`
+to `v0.0.123` on this host destroyed a working sandbox and needed manual
+recovery:
+
+- The recreate refused with "Messaging provider `oncall-telegram-bridge` does
+  not match the recorded credential binding" — because the Telegram bot token
+  had been rotated since the sandbox was created — and then destroyed the
+  sandbox anyway rather than stopping first.
+- Every documented recovery path (`onboard --resume`, `--fresh`, clearing the
+  failed `onboard-session.json`) then failed on a stale inference route
+  reservation: "its inference route reservation belongs to another onboarding
+  session". Only `nemoclaw <sb> destroy` cleared it.
+- `nemoclaw backup-all` ran first and wrote four snapshots, but the new CLI
+  refused to restore them: "Cannot restore provider snapshot authority: legacy
+  snapshot lacks managed workload and provider runtime authority". The backups
+  taken specifically to survive the upgrade did not survive the upgrade. A
+  plain `tar` of the workspace did.
+- After recovery, the sandbox network policy had to be re-applied with a flag
+  that was not previously required: `v0.0.123` rejects RFC1918 endpoints unless
+  passed `--trusted-private-host`, so an unchanged preset file that worked on
+  `v0.0.109` is now refused.
+
+Expected: refuse the upgrade before destroying anything when a credential
+binding has drifted; release route reservations when the owning session fails;
+and make `backup-all` snapshots restorable by the version being upgraded to,
+since that is their only purpose.
 
 Expected: have the CLI compare the installed tag against `lkg` and say when it
 has moved — `install.sh` already resolves and verifies both versions when it
