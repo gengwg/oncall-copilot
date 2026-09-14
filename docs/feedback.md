@@ -159,7 +159,7 @@ succeeding.
 Expected: surface the pending request and its approval command in the error
 text, or in `nemoclaw <sb> recover` / the TUI alongside network rules.
 
-### 13. Version numbers disagree, so there is no way to tell you are behind
+### 13. The install channel is a moving tag with no update signal
 
 **Partly tracked upstream as [NVIDIA/NemoClaw#8377][i8377] (open epic).** That
 epic proposes an NVIDIA-controlled npm package and states the goal directly:
@@ -179,8 +179,19 @@ the CLI agree:
 | Latest upstream tag | `v0.0.123` |
 
 So the shipped `package.json` carries `0.1.0`, a number unrelated to the release
-it came from. Nothing in the CLI reports that fourteen newer tags exist, and
-`nemoclaw --version` alone gives no way to find out.
+it came from.
+
+**How you end up behind.** `install.sh` defaults to `DEFAULT_INSTALL_REF="lkg"`,
+a moving "last known good" tag that deliberately trails `main`. This host
+installed on 2026-09-06, when `lkg` pointed at `v0.0.109` — a build whose HEAD
+commit is dated 2026-08-14, so already three weeks behind the tip on install
+day. `lkg` has since advanced to `v0.0.123`. Nothing on the machine
+auto-updates, and no command reports that the tag moved: `nemoclaw --version`
+prints `v0.0.109` with no indication that it is fourteen releases stale.
+
+Trailing `main` is a reasonable default. Doing it silently is the problem: the
+version you get depends on the day you installed, and only re-running the
+installer reveals that.
 
 Worth flagging separately: the bare `nemoclaw` name **on npm is not NVIDIA's**.
 It is a single publish from 2026-03-15 by an unaffiliated maintainer, with no
@@ -191,8 +202,10 @@ control. #8377 proposes `@nvidia/nemoclaw` precisely because the unscoped name
 is unavailable; until that ships, the name is a supply-chain footgun worth
 claiming or documenting.
 
-Expected: make `package.json` carry the release version, and have the CLI say
-when a newer tag exists. Every other finding in this document was observed on
+Expected: have the CLI compare the installed tag against `lkg` and say when it
+has moved — `install.sh` already resolves and verifies both versions when it
+updates, so the check exists and is simply not surfaced. And make
+`package.json` carry the release version. Every other finding in this document was observed on
 `v0.0.109` with no signal that newer builds existed — item 11 in particular is
 already fixed upstream in `v0.0.114`.
 

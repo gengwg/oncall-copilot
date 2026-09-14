@@ -155,11 +155,12 @@ from operating the system through a sandbox rebuild:
   the sandbox, and no host CLI, error message, or TUI mentions it. (This one is
   a confirmation of the open upstream issue NVIDIA/NemoClaw#10070, not a new
   finding; the other three have no upstream match.)
-- The shipped package.json version does not match the release tag, the CLI
-  never says a newer build exists, and the unscoped `nemoclaw` name on npm
-  belongs to an unaffiliated publisher — so there is no reliable way to tell
-  you are fourteen tags behind. (Partly tracked upstream as the open epic
-  NVIDIA/NemoClaw#8377.)
+- The installer defaults to `lkg`, a moving tag that trails main, and nothing
+  ever reports that it moved — so the version you get depends on the day you
+  installed, and this host sat fourteen releases behind without a signal. The
+  shipped package.json version also does not match the release tag, and the
+  unscoped `nemoclaw` name on npm belongs to an unaffiliated publisher.
+  (Partly tracked upstream as the open epic NVIDIA/NemoClaw#8377.)
 - A failed channel delivery surfaces only as a cron `error`, indistinguishable
   from the command failing.
 
