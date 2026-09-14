@@ -196,6 +196,10 @@ curl -sf -m 2 -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$RELAY_PORT/al
 post_alert DemoServiceDown
 run_investigate STUB_PROM_EMPTY=1
 check "no series -> evidence reads n/a" "err_ratio=n/a" "$OUT"
+case "$ERR" in
+  *"no evidence collected"*) bad "partial evidence does not trip the warning" "warned despite logs being present" ;;
+  *) ok "partial evidence does not trip the warning" ;;
+esac
 
 # 12. A ratio over a window with no traffic is NaN, which is a real sample and
 #     not an empty result, so it used to reach the Telegram brief verbatim.
@@ -228,6 +232,22 @@ for pair in "cause:$cause_line" "action:$sugg_line"; do
     *) bad "$name clipped at a word boundary" "no elision marker; field was cut mid-word or not at all: $line" ;;
   esac
 done
+
+# 14. Broken collectors must be called out, not silently reasoned over. A
+#     non-executable skill script is exactly how this happened in practice.
+curl -sf -m 2 -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$RELAY_PORT/alerts" >/dev/null
+chmod -x "$TMP/ws/skills/promql-query/scripts/query.sh" "$TMP/ws/skills/logql-query/scripts/query.sh"
+post_alert DemoHighErrorRate
+run_investigate
+chmod +x "$TMP/ws/skills/promql-query/scripts/query.sh" "$TMP/ws/skills/logql-query/scripts/query.sh"
+check "broken collectors -> loud on stderr" "no evidence collected" "$ERR"
+check "broken collectors -> names the unexecutable script" "is not executable" "$ERR"
+if [ -f "$TMP/ws/memory/incidents/$(date -u +%Y-%m-%d)-DemoHighErrorRate.md" ] \
+   && rg -q "Evidence collection failed" "$TMP/ws/memory/incidents/$(date -u +%Y-%m-%d)-DemoHighErrorRate.md"; then
+  ok "broken collectors -> report carries the warning"
+else
+  bad "broken collectors -> report carries the warning" "no warning banner in the filed report"
+fi
 
 echo
 echo "passed: $PASS  failed: $FAIL"
