@@ -115,9 +115,12 @@ https://thats-throat-vegetable-clip.trycloudflare.com
 ## 7. Demonstration video URL (required, <= 3 min, public YouTube)
 
 ```
-<your public YouTube URL for docs/media/demo.mp4>
+https://www.youtube.com/watch?v=7L6E7PknOUk
 ```
 
+> Verified public 2026-09-13 (oEmbed returns 200). Current YouTube title is
+> "demo2" — worth renaming to the project name before judges see it.
+>
 > Video: `docs/media/demo.mp4`, 84s, 1920x1080 h264+AAC, piper TTS narration
 > naming Token Factory + Nemotron + NemoClaw/OpenShell + Tavily. A real
 > screencast of the live pipeline with Telegram Desktop on screen: chaos
@@ -127,7 +130,7 @@ https://thats-throat-vegetable-clip.trycloudflare.com
 ## 8. City (Builders & Brews City Winner Award)
 
 ```
-<pick your nearest: NYC / Boston / SF / LA>
+San Francisco
 ```
 
 ## 9. Feedback on Nebius Token Factory, AI Cloud, NVIDIA tools (bonus: Most Valuable Feedback)
