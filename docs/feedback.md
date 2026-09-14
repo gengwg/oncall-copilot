@@ -161,31 +161,40 @@ text, or in `nemoclaw <sb> recover` / the TUI alongside network rules.
 
 ### 13. Version numbers disagree, so there is no way to tell you are behind
 
-Three different numbers describe the same install:
+**Partly tracked upstream as [NVIDIA/NemoClaw#8377][i8377] (open epic).** That
+epic proposes an NVIDIA-controlled npm package and states the goal directly:
+"The package and each installed CLI identify the same immutable NemoClaw
+release and source revision." Today they do not.
+
+[i8377]: https://github.com/NVIDIA/NemoClaw/issues/8377
+
+The installer leaves a git checkout in `~/.nemoclaw/source`, where the tag and
+the CLI agree:
 
 | Source | Value |
 |---|---|
 | `nemoclaw --version` | `v0.0.109` |
-| `~/.nemoclaw/source/package.json` | `0.1.0` |
 | `git -C ~/.nemoclaw/source describe --tags` | `v0.0.109` |
-| `npm view nemoclaw version` | `0.1.0` |
+| `~/.nemoclaw/source/package.json` | `0.1.0` |
 | Latest upstream tag | `v0.0.123` |
 
-The installer leaves a git checkout, so the tag and the CLI agree at `v0.0.109`.
-But `package.json` carries `0.1.0`, an unrelated number, and that is also the
-only version ever published to npm — once, on 2026-03-15, and never updated
-since. Six months of releases (`v0.0.110` through `v0.0.123`) exist only as
-tags.
+So the shipped `package.json` carries `0.1.0`, a number unrelated to the release
+it came from. Nothing in the CLI reports that fourteen newer tags exist, and
+`nemoclaw --version` alone gives no way to find out.
 
-The failure mode: a user checks `npm view nemoclaw version`, sees `0.1.0`,
-compares it to the `0.1.0` in their own `package.json`, and concludes they are
-current. They are fourteen tags behind, and nothing in the CLI says so. Every
-other finding in this document was observed in that state, which is worth
-knowing when triaging them: item 11 in particular is already fixed upstream in
-`v0.0.114`, and I had no signal that a newer build existed.
+Worth flagging separately: the bare `nemoclaw` name **on npm is not NVIDIA's**.
+It is a single publish from 2026-03-15 by an unaffiliated maintainer, with no
+repository, description, or homepage — and it carries version `0.1.0`, matching
+the number in the official `package.json`. Anyone who reaches for npm to check
+whether they are current gets a confident answer from a package NVIDIA does not
+control. #8377 proposes `@nvidia/nemoclaw` precisely because the unscoped name
+is unavailable; until that ships, the name is a supply-chain footgun worth
+claiming or documenting.
 
-Expected: publish releases to npm or drop the package, make `package.json`
-carry the release version, and have the CLI say when a newer tag exists.
+Expected: make `package.json` carry the release version, and have the CLI say
+when a newer tag exists. Every other finding in this document was observed on
+`v0.0.109` with no signal that newer builds existed — item 11 in particular is
+already fixed upstream in `v0.0.114`.
 
 ## Token Factory
 
