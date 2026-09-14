@@ -129,6 +129,7 @@ fi
 
 # Reset per-alert so evidence from the previous alert in the batch can't leak in.
 heap_trend=""
+evidence_broken=""
 # Always-collected baselines.
 up=$($PROM instant "up{job=\"$service\"}" 2>/dev/null | jq -r '.value // "n/a"' | head -1)
 err_ratio=$($PROM instant 'sum(rate(demo_errors_total[5m])) / sum(rate(demo_requests_total[5m]))' 2>/dev/null | jq -r '.value // "n/a"' | head -1)
@@ -163,6 +164,19 @@ err_ratio=$(norm "$err_ratio")
 heap=$(norm "$heap")
 lat_mode=$(norm "$lat_mode")
 err_logs="${logs:-}"
+
+# Every field n/a and no logs means the collectors are broken -- unreadable
+# skill scripts, an unreachable Prometheus -- not a mysterious incident. The
+# n/a fallback above is what makes that look like a normal quiet page, so say
+# so loudly instead of shipping a brief reasoned over nothing.
+if [ "$up" = "n/a" ] && [ "$err_ratio" = "n/a" ] && [ "$heap" = "n/a" ] \
+   && [ "$lat_mode" = "n/a" ] && [ -z "$err_logs" ]; then
+  echo "error: no evidence collected for $alertname — every query returned nothing." >&2
+  echo "  checked: $PROM, $LOGQ against $PROMETHEUS_URL and $LOKI_URL" >&2
+  [ -x "$PROM" ] || echo "  $PROM is not executable" >&2
+  [ -x "$LOGQ" ] || echo "  $LOGQ is not executable" >&2
+  evidence_broken=1
+fi
 err_string=$(printf '%s' "$err_logs" | head -1 | sed 's/^[^\t]*\t//' | jq -r 'try (.err // .msg // empty) catch empty' 2>/dev/null | head -1)
 
 # --- Tavily enrichment for unfamiliar errors ---
@@ -227,6 +241,7 @@ action=$(printf '%s' "$analysis" | sed -n 's/^ACTION: *//p' | head -1)
   printf -- '- heap_trend: %s\n' "${heap_trend:-n/a}"
   printf -- '- latency_mode: %s\n' "$lat_mode"
   printf -- '- recent logs (%sm window from alert start):\n```\n%s\n```\n\n' "$lookback" "$err_logs"
+  [ -n "${evidence_broken:-}" ] && printf '> **Evidence collection failed** — every query returned nothing, so the\n> analysis below has no live data behind it.\n\n'
   printf '## Web context\n%s\n\n' "$web_context"
   printf '## Suggested first action\n%s\n\n' "$action"
   printf '## Full Nemotron analysis\n%s\n' "$analysis"
