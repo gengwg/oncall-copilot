@@ -8,9 +8,104 @@ This doubles as hackathon "Most Valuable Feedback" submission material.
 not visible from inside the tooling — see item 13. Where an upstream issue
 already tracks a finding, it is cited inline.
 
-## NemoClaw (v0.0.109, OpenShell 0.0.101, Ubuntu 26.04 host, Docker 29)
+## Summary: what we used, what worked, what needs work
 
-### 1. Dashboard port reallocation breaks the forward (agent-recoverable blocker)
+The detailed findings below are mostly defects, because that is the useful part
+of feedback. This section answers the questions the organizers asked directly,
+including what went right.
+
+### Nebius Token Factory
+
+**Used for:** every root-cause analysis. The investigator posts collected
+evidence to an OpenAI-compatible chat-completions endpoint and gets back the
+assessment that becomes the Telegram page.
+
+**Worked well:** the OpenAI-compatible surface dropped straight into NemoClaw's
+`custom` provider with four environment variables and no model-serving work at
+all. Zero to first token was one `spike/01-onboard.sh` run. Latency was a
+non-issue: whole investigations, including four Prometheus/Loki round trips and
+a Tavily search, land a page 74 seconds after chaos injection, and the model
+call is well inside that.
+
+**Needs work:** reasoning models silently return `content: null` when
+`max_tokens` is small (item 4). Nothing in the response says the budget was
+spent on reasoning tokens, so it reads as an empty completion.
+
+**Build with it again:** yes. It was the least troublesome component in the
+stack, and the only one that never needed a workaround.
+
+### NVIDIA Nemotron 3 Ultra
+
+**Used for:** reasoning over live metrics, log lines, a runbook excerpt, and
+Tavily results to produce a two-sentence root cause plus a suggested first
+action.
+
+**Worked well:** the analyses are genuinely diagnostic rather than a restatement
+of the alert. From a real run:
+
+> The demo-app is returning a 53.4% error rate with all recent errors showing
+> "upstream dial timeout" (502), indicating the upstream dependency is
+> unreachable. The low heap allocation (877,968 bytes) and inactive chaos flags
+> (latency_mode=0) rule out local resource exhaustion or injected faults.
+
+Using the heap and latency-mode fields to *rule out* competing hypotheses is
+the behaviour that makes this project worth building. It also correctly flagged
+absent evidence rather than inventing a cause when the collectors were broken.
+
+**Needs work:** the `max_tokens` interaction above is the only real friction.
+
+**Build with it again:** yes, specifically for evidence-grounded reasoning where
+the output has to be short and decision-shaped.
+
+### Nebius AI Cloud
+
+**Used for:** attempted to host the public incident dashboard on Serverless
+Endpoints, as the durable alternative to a Cloudflare quick-tunnel.
+
+**Could not evaluate:** creating a container registry in the project returns
+`PermissionDenied: Service registry error Auth`. Reads succeed — subnets,
+registries and endpoints all list — so this is an account entitlement rather
+than a broken CLI. The deploy script never got past its first write, so we have
+no basis to judge the product itself.
+
+**Needs work:** the failure names the RPC but not the missing entitlement or
+where to enable it, which is what a new account actually needs to hear.
+
+### NVIDIA NemoClaw + OpenShell
+
+**Used for:** the sandboxed agent runtime — deny-by-default egress, the managed
+`inference.local` route, cron automations, and the Telegram channel.
+
+**Worked well:** the security model is the reason this project can claim to be
+private. Declaring an egress preset and having the sandbox refuse everything
+else is the right default, and it held: when a policy was missing after a
+rebuild, the agent could not reach Prometheus rather than silently falling back
+to the open internet. `nemoclaw <sb> exec` stayed reliable throughout, including
+while the gateway forwards were broken, which made every recovery possible.
+
+**Needs work:** this is where all thirteen findings below come from. The theme
+is that failures are silent or misattributed — a forward that succeeded
+reported as failed (item 9), an upgrade that destroyed a working sandbox over a
+rotated credential and produced backups it then refused to restore (item 13),
+a scope upgrade whose approval command lived only inside the sandbox (item 11,
+since fixed in v0.0.123).
+
+**Onboarding, zero to hello world:** roughly an hour, most of it spent on one
+issue. The first `onboard` run reached step 8 of 8 and failed on
+`Port 18790 is not available`, and every retry failed the same way while the
+sandbox was in fact already working. Recognising that the error was cosmetic —
+that the agent was usable and only the control UI was unavailable — was the
+single biggest time sink of the project. See items 1 and 9.
+
+**Build with it again:** yes for the sandbox and policy model, which we have not
+found elsewhere. The upgrade and recovery paths need to stabilise first for
+anything longer-lived than a hackathon.
+
+## Detailed findings
+
+### NemoClaw (v0.0.109, OpenShell 0.0.101, Ubuntu 26.04 host, Docker 29)
+
+#### 1. Dashboard port reallocation breaks the forward (agent-recoverable blocker)
 
 When the default dashboard port (18789) is occupied by a stale forward at
 onboard time, the host port is auto-bumped to 18790, but the sandbox image is
@@ -31,7 +126,7 @@ the port baked into the image; kill all stray `ssh -L 187x` forwards; then
 Expected: either forward host:X -> sandbox:18789 (honor the baked port as the
 target), or rebuild/reconfigure when the dashboard port changes.
 
-### 2. Tavily web search breaks the sandbox image build
+#### 2. Tavily web search breaks the sandbox image build
 
 With `TAVILY_API_KEY` present in the environment, non-interactive onboard
 auto-selects Tavily (`webSearchConfig { fetchEnabled: true, provider: tavily }`)
@@ -49,14 +144,14 @@ sandbox afterwards.
 Expected: either ship a pinned Tavily plugin, or gracefully skip web search in
 non-interactive mode when the plugin can't be installed.
 
-### 3. Ubuntu 26.04 onboarding works (validation gap)
+#### 3. Ubuntu 26.04 onboarding works (validation gap)
 
 Docs list Ubuntu 24.04 as the validated host path with 26.04 "pending".
 CLI install, Docker preflight, OpenShell gateway, sandbox build, and OpenClaw
 agent turns all worked on 26.04.1 (Node 24.19, Docker 29.7). Worth extending
 the validated matrix.
 
-### 9. `openshell forward start` reports failure on a forward that succeeded
+#### 9. `openshell forward start` reports failure on a forward that succeeded
 
 No upstream issue matches this one; the closest, #7266, is a listener that
 genuinely failed to start rather than a probe misreporting one that worked.
@@ -86,7 +181,7 @@ false negative manufactures the symptom it then blames (see item 1).
 Expected: poll the listener (or wait on the mux socket) before declaring
 failure, and treat an existing healthy forward as success.
 
-### 10. `rebuild` prints success, exits 1, and silently drops cron jobs
+#### 10. `rebuild` prints success, exits 1, and silently drops cron jobs
 
 A closed issue, [NVIDIA/NemoClaw#11137][i11137], covers `rebuild` exiting 1, but
 for a sandbox left in an Error phase. Here the rebuild genuinely succeeds and
@@ -117,7 +212,7 @@ Expected: exit 0 when the rebuild succeeded and only verification was
 inconclusive; either restore cron jobs alongside workspace state or say plainly
 that they must be re-registered.
 
-### 11. Post-rebuild device scope upgrade has no discoverable approval path
+#### 11. Post-rebuild device scope upgrade has no discoverable approval path
 
 **Fixed in `v0.0.123` — verified.** Tracked upstream as
 [NVIDIA/NemoClaw#10070][i10070], which reported that the fix (#9853, "name the
@@ -169,7 +264,7 @@ succeeding.
 Expected: surface the pending request and its approval command in the error
 text, or in `nemoclaw <sb> recover` / the TUI alongside network rules.
 
-### 13. The install channel is a moving tag with no update signal
+#### 13. The install channel is a moving tag with no update signal
 
 **Partly tracked upstream as [NVIDIA/NemoClaw#8377][i8377] (open epic).** That
 epic proposes an NVIDIA-controlled npm package and states the goal directly:
@@ -246,9 +341,9 @@ updates, so the check exists and is simply not surfaced. And make
 `v0.0.109` with no signal that newer builds existed — item 11 in particular is
 already fixed upstream in `v0.0.114`.
 
-## Token Factory
+### Token Factory
 
-### 4. Reasoning models silently return `content: null` when max_tokens is small
+#### 4. Reasoning models silently return `content: null` when max_tokens is small
 
 `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B` with `max_tokens: 20` returns HTTP 200
 with `message.content: null` and all tokens consumed by `reasoning`. No error,
@@ -258,9 +353,9 @@ surface this as an empty reply.
 Expected: return the reasoning overflow as an explicit finish_reason or an
 error, so clients know to raise max_tokens.
 
-## OpenClaw
+### OpenClaw
 
-### 5. Unattended agent-turn jobs don't reliably execute tools with reasoning models
+#### 5. Unattended agent-turn jobs don't reliably execute tools with reasoning models
 
 OpenClaw 2026.7.1. An isolated or custom-session cron `agentTurn` job with a
 reasoning model (Nemotron 3 Ultra) narrates tool calls as text instead of
@@ -275,7 +370,7 @@ Impact: unattended investigation agents are unreliable. Workaround: use a
 `command` payload that runs the deterministic collection and calls the model
 directly, reserving the LLM for analysis.
 
-### 6. Code-mode trigger scripts expose `tools`, not the documented `exec` global
+#### 6. Code-mode trigger scripts expose `tools`, not the documented `exec` global
 
 The current Automations docs use `await exec({ command: ... })` and
 `trigger.state`. This build's code-mode exposes `tools` (object) and `trigger`,
@@ -284,21 +379,21 @@ but NOT `exec` or `fetch` (`ReferenceError: exec is not defined`). stdout is at
 `await tools.call("exec", {command})`. The docs/runtime mismatch cost real
 debugging time.
 
-### 7. Cron `--command-env` values stored in plaintext in job spec
+#### 7. Cron `--command-env` values stored in plaintext in job spec
 
 `openclaw cron add --command-env NEBIUS_API_KEY=...` stores the secret in
 plaintext in the job definition (`openclaw cron list --json` shows it). No
 SecretRef support for command-env. Secrets should reference the OpenClaw
 secrets store, not literal values.
 
-### 8. Docs/runtime flag drift
+#### 8. Docs/runtime flag drift
 
 This build's `openclaw cron add` has no `--stream-command`, no `--script`
 payloads, and no `--every <30s` (min 30000ms), though the current Automations
 docs describe all three. Version-pin the docs or gate features behind the
 runtime that introduced them.
 
-### 12. Channel delivery failure is only visible as a cron `error`
+#### 12. Channel delivery failure is only visible as a cron `error`
 
 No upstream issue matches this one.
 
