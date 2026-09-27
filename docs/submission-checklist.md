@@ -89,11 +89,18 @@ https://github.com/gengwg/oncall-copilot
 ## 6. Working demo URL (required, non-Physical tracks)
 
 ```
-https://thats-throat-vegetable-clip.trycloudflare.com
+https://potatoes-cylinder-buzz-platinum.trycloudflare.com
 ```
 
-> Live as of 2026-09-13: returns HTTP 200 and lists real incident reports the
-> copilot filed. Served by `deploy/dashboard` through a Cloudflare quick-tunnel
+> Live as of 2026-09-27: returns HTTP 200 and lists real incident reports the
+> copilot filed.
+>
+> **This already broke once.** The 2026-09-13 URL was dead by 2026-09-27 even
+> though `cloudflared` was still running: a quick tunnel's registration expires
+> and the process then loops on `Unauthorized: Tunnel not found` forever
+> without minting a replacement. `demo-services.sh start` will not fix that on
+> its own, because it treats a running process as healthy. Kill cloudflared and
+> restart it, then re-read the URL. Served by `deploy/dashboard` through a Cloudflare quick-tunnel
 > started by `deploy/demo-services.sh start`.
 >
 > **Quick-tunnel URLs are not stable.** A new one is minted every time the
