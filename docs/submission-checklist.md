@@ -133,9 +133,24 @@ https://www.youtube.com/watch?v=7L6E7PknOUk
 San Francisco
 ```
 
-## 9. Feedback on Nebius Token Factory, AI Cloud, NVIDIA tools (bonus: Most Valuable Feedback)
+## 9. Built With (tag every required tool here, not just in prose)
 
-Paste the full contents of `docs/feedback.md` — 13 documented, reproducible
+```
+nebius-token-factory, nvidia-nemotron-3-ultra, nvidia-nemoclaw, nvidia-openshell,
+openclaw, tavily, prometheus, alertmanager, loki, grafana, alloy, kubernetes,
+minikube, go, telegram, docker
+```
+
+> The organizers call this out explicitly: the required tools must be findable
+> in Built With, not only in the description. Nebius Token Factory and the
+> NVIDIA model come first.
+
+## 10. Feedback on Nebius Token Factory, AI Cloud, NVIDIA tools (bonus: Most Valuable Feedback)
+
+Paste the full contents of `docs/feedback.md`. It opens with a per-tool summary
+answering exactly what the organizers asked — what each tool was used for, what
+worked well, what needs work, how onboarding felt, and whether we would build
+with it again — followed by 13 documented, reproducible
 findings, observed on `nemoclaw` CLI v0.0.109 against upstream tag v0.0.123 —
 a gap the tooling gives no signal about, which is itself finding 13.
 
@@ -168,7 +183,7 @@ from operating the system through a sandbox rebuild:
 - A failed channel delivery surfaces only as a cron `error`, indistinguishable
   from the command failing.
 
-## 10. Significant updates during the submission period (pre-existing project?)
+## 11. Significant updates during the submission period (pre-existing project?)
 
 ```
 N/A — newly created during the submission period (Aug 26 – Oct 30, 2026).
