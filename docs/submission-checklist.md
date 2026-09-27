@@ -3,7 +3,42 @@
 Deadline: **Oct 30, 2026 @ 10:00am PDT**. URL:
 https://nebiusglobalaihackathon.devpost.com/ ("Enter a Submission")
 
-Fill each field with the values below.
+---
+
+## Day of submission — do these first, in order
+
+Everything below the line is written down and stable. These four are not:
+they depend on live state that rots, and one of them has already failed once.
+
+1. **Log into Devpost and join the hackathon.** The site shows "Join hackathon"
+   instead of "Enter a Submission" until the account has joined, and the
+   submission form is not reachable before that.
+
+2. **Regenerate the demo tunnel.** The recorded URL will almost certainly be
+   dead — the previous one lasted 13 days. A running `cloudflared` is *not*
+   evidence it works: the registration expires and the process loops on
+   "Unauthorized: Tunnel not found" forever while every local check says green.
+
+   ```bash
+   pkill -f "cloudflared tunnel"
+   ./deploy/demo-services.sh start     # prints the new URL
+   ```
+
+3. **Verify the new URL from outside**, then paste it into field 6:
+
+   ```bash
+   curl -o /dev/null -w '%{http_code}\n' <new-url>      # must be 200
+   ```
+
+4. **Confirm the repo is still public** — a required field:
+
+   ```bash
+   gh repo view gengwg/oncall-copilot --json visibility
+   ```
+
+Then work fields 1 through 11 in order. Field 10 is the whole of
+`docs/feedback.md`, pasted; it is long, and it is a scored part of the
+submission rather than an afterthought.
 
 ---
 
