@@ -174,6 +174,9 @@ https://www.youtube.com/watch?v=7L6E7PknOUk
 San Francisco
 ```
 
+> Winning the City award requires attending the San Francisco event in person
+> (Devpost FAQ).
+
 ## 9. Built With (tag every required tool here, not just in prose)
 
 ```
@@ -268,7 +271,8 @@ to leave buffer; you can update the Devpost project page after submitting.
 - **Personal AI Track Winner** — the project is on-track for this.
 - **Best Use of Tavily** — Tavily is a runtime call inside the investigation
   loop (verified in incident reports).
-- **City Winner ($500)** — pick your city in field 8.
+- **City Winner ($500)** — pick your city in field 8. Requires attending the
+  city's event in person.
 - **Most Valuable Feedback** — `docs/feedback.md` (13 findings) is a strong
   candidate.
 
