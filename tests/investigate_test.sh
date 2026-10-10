@@ -88,11 +88,11 @@ for _ in $(seq 50); do
   sleep 0.1
 done
 
-post_alert() { # post_alert <alertname> [status]
+post_alert() { # post_alert <alertname> [status] [service]
   curl -sf -m 2 -X POST "http://127.0.0.1:$RELAY_PORT/alert" \
     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-    -d "$(jq -n --arg n "$1" --arg s "${2:-firing}" \
-      '{status:$s, alerts:[{status:$s, labels:{alertname:$n, severity:"critical", service:"demo-app"},
+    -d "$(jq -n --arg n "$1" --arg s "${2:-firing}" --arg svc "${3:-demo-app}" \
+      '{status:$s, alerts:[{status:$s, labels:{alertname:$n, severity:"critical", service:$svc},
         annotations:{summary:("summary for " + $n)}, startsAt:"2026-09-12T00:00:00Z"}]}')" >/dev/null
 }
 
@@ -180,6 +180,13 @@ else
   ok "path traversal in alertname contained"
 fi
 
+# 9b. The service label lands in the runbook path and in queries; it gets the
+#     same treatment. The sanitized value is what reaches the report.
+post_alert EscapedService firing '../../escaped-svc'
+run_investigate
+check "service label sanitized before use" 'Service**: ______escaped-svc' \
+  "$(cat "$TMP/ws/memory/incidents/$(date -u +%Y-%m-%d)-EscapedService.md" 2>/dev/null)"
+
 # 10. An unwritable lock must degrade to running unlocked, not to a silent
 #     NO_REPLY on every tick.
 curl -sf -m 2 -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$RELAY_PORT/alerts" >/dev/null
@@ -216,8 +223,8 @@ check "NaN -> err_ratio reads n/a" "err_ratio=n/a" "$OUT"
 curl -sf -m 2 -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$RELAY_PORT/alerts" >/dev/null
 post_alert DemoHighErrorRate
 run_investigate
-cause_line=$(printf '%s' "$OUT" | rg '^Likely cause:' | head -1)
-sugg_line=$(printf '%s' "$OUT" | rg '^Suggested:' | head -1)
+cause_line=$(printf '%s' "$OUT" | grep '^Likely cause:' | head -1)
+sugg_line=$(printf '%s' "$OUT" | grep '^Suggested:' | head -1)
 # The stub analysis exceeds both caps, so each field MUST be elided. head -c
 # cuts mid-word and adds no marker, so requiring the marker catches it.
 for pair in "cause:$cause_line" "action:$sugg_line"; do
@@ -243,7 +250,7 @@ chmod +x "$TMP/ws/skills/promql-query/scripts/query.sh" "$TMP/ws/skills/logql-qu
 check "broken collectors -> loud on stderr" "no evidence collected" "$ERR"
 check "broken collectors -> names the unexecutable script" "is not executable" "$ERR"
 if [ -f "$TMP/ws/memory/incidents/$(date -u +%Y-%m-%d)-DemoHighErrorRate.md" ] \
-   && rg -q "Evidence collection failed" "$TMP/ws/memory/incidents/$(date -u +%Y-%m-%d)-DemoHighErrorRate.md"; then
+   && grep -q "Evidence collection failed" "$TMP/ws/memory/incidents/$(date -u +%Y-%m-%d)-DemoHighErrorRate.md"; then
   ok "broken collectors -> report carries the warning"
 else
   bad "broken collectors -> report carries the warning" "no warning banner in the filed report"

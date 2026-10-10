@@ -59,7 +59,9 @@ demo-app (/chaos) -> Prometheus alert -> Alertmanager --webhook--> alert-relay
 ## Layout
 
 - `demo-app/` — Go service with a `/chaos` endpoint (latency, errors, memory, CPU)
-- `alert-relay/` — Alertmanager webhook → stdout + queue; `investigate.sh` (the loop)
+- `alert-relay/` — Alertmanager webhook → stdout + queue; `investigate.sh` (the loop).
+  Its evidence queries read the demo-app's `demo_*` series; point them at your
+  own service's metrics to reuse it
 - `skills/` — OpenClaw skills: `promql-query`, `logql-query`
 - `memory/` — agent knowledge layer (runbooks, incident reports)
 - `deploy/minikube/` — observability stack (Prometheus, Alertmanager, Loki, Grafana, Alloy)
@@ -133,7 +135,7 @@ RELAY_LOG=/tmp/opencode/relay-host.out COPILOT_ASSERT=1 ./tests/e2e/run.sh
   `custom` provider — no model-serving work.
 - Nemotron 3 Ultra's reasoning produces root-cause analyses that correctly
   distinguish an injected failure from resource exhaustion (see
-  `memory/incidents/` for real examples).
+  `deploy/dashboard/incidents/` for real reports it filed).
 - The sandbox's managed inference route (`inference.local`) keeps the analysis
   call inside the policy boundary.
 

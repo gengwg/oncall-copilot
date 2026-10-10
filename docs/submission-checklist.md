@@ -124,11 +124,17 @@ https://github.com/gengwg/oncall-copilot
 ## 6. Working demo URL (required, non-Physical tracks)
 
 ```
-https://potatoes-cylinder-buzz-platinum.trycloudflare.com
+https://stephanie-retained-positive-respondent.trycloudflare.com
 ```
 
-> Live as of 2026-09-27: returns HTTP 200 and lists real incident reports the
+> Live as of 2026-10-10: returns HTTP 200 and lists real incident reports the
 > copilot filed.
+>
+> **The sandbox cron backs off while the host is down.** After enough failed
+> drains (the relay unreachable), OpenClaw retries `alert-intake` hourly, so the
+> demo stays quiet for up to an hour after the host comes back.
+> `demo-services.sh start` now runs the job once to reset it; by hand:
+> `nemoclaw oncall exec -- openclaw cron run <job id>`.
 >
 > **This already broke once.** The 2026-09-13 URL was dead by 2026-09-27 even
 > though `cloudflared` was still running: a quick tunnel's registration expires

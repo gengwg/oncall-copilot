@@ -40,6 +40,10 @@ type line struct {
 	StartsAt    time.Time         `json:"starts_at"`
 }
 
+// maxQueue bounds memory when nothing drains for a long time (the sandbox cron
+// backs off to an hourly retry after repeated failures). Oldest alerts go first.
+const maxQueue = 1000
+
 var (
 	addr  = flag.String("addr", "127.0.0.1:9099", "listen address")
 	token = flag.String("token", "", "bearer token required on POST /alert (empty = no auth)")
@@ -121,6 +125,9 @@ func handleAlert(w http.ResponseWriter, r *http.Request) {
 		}
 		fmt.Println(string(b))
 		queue = append(queue, rec)
+		if len(queue) > maxQueue {
+			queue = queue[len(queue)-maxQueue:]
+		}
 	}
 	w.WriteHeader(http.StatusAccepted)
 }
