@@ -124,11 +124,17 @@ https://github.com/gengwg/oncall-copilot
 ## 6. Working demo URL (required, non-Physical tracks)
 
 ```
-https://stephanie-retained-positive-respondent.trycloudflare.com
+https://gengwg.github.io/oncall-copilot/
 ```
 
-> Live as of 2026-10-10: returns HTTP 200 and lists real incident reports the
-> copilot filed.
+> GitHub Pages, since 2026-10-10: the dashboard rendered as static pages from
+> `deploy/dashboard/incidents/`, republished by `.github/workflows/pages.yml`
+> on every push there. `deploy/sync-incidents.sh` on the host pushes each new
+> report, so the feed stays live while the demo runs and stays up (with the
+> last reports) if the host dies. No tunnel, no domain, no Nebius permissions.
+>
+> The quick tunnel below still serves the live Go dashboard while this machine
+> is up: https://stephanie-retained-positive-respondent.trycloudflare.com
 >
 > **The sandbox cron backs off while the host is down.** After enough failed
 > drains (the relay unreachable), OpenClaw retries `alert-intake` hourly, so the
