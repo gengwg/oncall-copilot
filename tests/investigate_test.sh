@@ -223,8 +223,8 @@ check "NaN -> err_ratio reads n/a" "err_ratio=n/a" "$OUT"
 curl -sf -m 2 -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$RELAY_PORT/alerts" >/dev/null
 post_alert DemoHighErrorRate
 run_investigate
-cause_line=$(printf '%s' "$OUT" | rg '^Likely cause:' | head -1)
-sugg_line=$(printf '%s' "$OUT" | rg '^Suggested:' | head -1)
+cause_line=$(printf '%s' "$OUT" | grep '^Likely cause:' | head -1)
+sugg_line=$(printf '%s' "$OUT" | grep '^Suggested:' | head -1)
 # The stub analysis exceeds both caps, so each field MUST be elided. head -c
 # cuts mid-word and adds no marker, so requiring the marker catches it.
 for pair in "cause:$cause_line" "action:$sugg_line"; do
@@ -250,7 +250,7 @@ chmod +x "$TMP/ws/skills/promql-query/scripts/query.sh" "$TMP/ws/skills/logql-qu
 check "broken collectors -> loud on stderr" "no evidence collected" "$ERR"
 check "broken collectors -> names the unexecutable script" "is not executable" "$ERR"
 if [ -f "$TMP/ws/memory/incidents/$(date -u +%Y-%m-%d)-DemoHighErrorRate.md" ] \
-   && rg -q "Evidence collection failed" "$TMP/ws/memory/incidents/$(date -u +%Y-%m-%d)-DemoHighErrorRate.md"; then
+   && grep -q "Evidence collection failed" "$TMP/ws/memory/incidents/$(date -u +%Y-%m-%d)-DemoHighErrorRate.md"; then
   ok "broken collectors -> report carries the warning"
 else
   bad "broken collectors -> report carries the warning" "no warning banner in the filed report"
