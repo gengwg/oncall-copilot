@@ -158,6 +158,14 @@ https://stephanie-retained-positive-respondent.trycloudflare.com
 > through project detection and fails on the first write. Once billing or the
 > registry/AI-endpoint editor roles are enabled, re-run it and swap this field
 > for the managed URL.
+>
+> Re-checked 2026-10-10 after a fresh `nebius` login: registry creation is
+> denied in all five regional projects of the tenant, and `nebius ai endpoint
+> create` is denied too, even with a public image (so bypassing the registry
+> via ghcr.io would not help). This is an account entitlement, not a script
+> or region problem; ask the organizers or Nebius support to enable Container
+> Registry and AI Endpoints on tenant `pink-panther-tenant-jhc`. Until then
+> the quick tunnel from this machine is the demo URL.
 
 ## 7. Demonstration video URL (required, <= 3 min, public YouTube)
 
