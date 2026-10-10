@@ -33,7 +33,7 @@ it remembers for next time.
 | **NVIDIA Nemotron 3 Ultra** (Token Factory) | root-cause reasoning over collected evidence |
 | **Nebius Token Factory** | OpenAI-compatible inference endpoint (`custom` provider in NemoClaw) |
 | **Tavily** | web search for unfamiliar error strings during investigation |
-| **Nebius Serverless Endpoints** | hosts the public incident dashboard (demo URL) |
+| **GitHub Pages** | hosts the public incident feed (demo URL): the dashboard rendered as static pages, republished on every new report |
 | Prometheus + Alertmanager + Loki + Grafana + Alloy | local demo observability stack (minikube) |
 
 ## Data flow
@@ -65,7 +65,8 @@ demo-app (/chaos) -> Prometheus alert -> Alertmanager --webhook--> alert-relay
 - `skills/` — OpenClaw skills: `promql-query`, `logql-query`
 - `memory/` — agent knowledge layer (runbooks, incident reports)
 - `deploy/minikube/` — observability stack (Prometheus, Alertmanager, Loki, Grafana, Alloy)
-- `deploy/dashboard/` — incident dashboard (Nebius Serverless)
+- `deploy/dashboard/` — incident dashboard; `-render` writes it as static pages for GitHub Pages
+  (https://gengwg.github.io/oncall-copilot/). `deploy/sync-incidents.sh` pushes each new report to the repo, which republishes the feed
 - `deploy/policy-local-observability.yaml` — sandbox network policy for Prom/Loki.
   Apply with `nemoclaw <sb> policy add --from-file deploy/policy-local-observability.yaml
   --trusted-private-host 172.18.0.1 --yes`; NemoClaw v0.0.123+ refuses RFC1918
@@ -112,7 +113,8 @@ curl "localhost:18080/chaos/stop"
 ```
 
 `./deploy/demo-services.sh status` shows the state of every host service;
-`stop` tears them down.
+`stop` tears them down. Start it with an SSH agent that can push to the repo
+in the environment, or the incident sync cannot publish new reports.
 
 ## Testing
 

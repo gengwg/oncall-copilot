@@ -1,5 +1,8 @@
 // dashboard serves the on-call copilot's incident feed: a list of incident
 // reports written by the agent, plus a health endpoint. Read-only.
+//
+// With -render it writes the same pages as static files instead, which is
+// what the GitHub Pages workflow publishes.
 package main
 
 import (
@@ -18,6 +21,7 @@ import (
 var (
 	addr   = flag.String("addr", ":8080", "listen address")
 	incDir = flag.String("incidents", "/data/incidents", "incident reports dir")
+	render = flag.String("render", "", "write a static copy of the site to this dir and exit")
 )
 
 type incident struct {
@@ -29,6 +33,13 @@ type incident struct {
 
 func main() {
 	flag.Parse()
+	if *render != "" {
+		if err := renderStatic(*render); err != nil {
+			slog.Error("render failed", "err", err)
+			os.Exit(1)
+		}
+		return
+	}
 	http.HandleFunc("GET /", handleIndex)
 	http.HandleFunc("GET /incident/", handleIncident)
 	http.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
@@ -81,18 +92,27 @@ func sevClass(body string) string {
 	return "sev-warning"
 }
 
-func handleIndex(w http.ResponseWriter, r *http.Request) {
-	inc := load()
+// indexHTML lists the incidents; link turns a report file name into its href,
+// which differs between the served site and the static one.
+func indexHTML(inc []incident, link func(name string) string) string {
 	var sb strings.Builder
 	if len(inc) == 0 {
 		sb.WriteString(`<div class="card">No incidents yet. The copilot is watching.</div>`)
 	}
 	for _, i := range inc {
-		sb.WriteString(fmt.Sprintf(`<div class="card %s"><div class="meta"><span class="badge">%s</span>%s</div><a href="/incident/%s">%s</a></div>`,
-			sevClass(i.Body), html.EscapeString(i.Name[:len(i.Name)-3]), i.ModTime.Format("15:04:05"), html.EscapeString(i.Name), html.EscapeString(i.Title)))
+		sb.WriteString(fmt.Sprintf(`<div class="card %s"><div class="meta"><span class="badge">%s</span>%s</div><a href="%s">%s</a></div>`,
+			sevClass(i.Body), html.EscapeString(i.Title), i.ModTime.Format("15:04:05"), link(i.Name), html.EscapeString(i.Title)))
 	}
+	return fmt.Sprintf(page, sb.String())
+}
+
+func incidentHTML(body, back string) string {
+	return fmt.Sprintf(page, fmt.Sprintf(`<div class="card"><div class="meta"><a href="%s">&larr; back</a></div><pre>%s</pre></div>`, back, html.EscapeString(body)))
+}
+
+func handleIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, page, sb.String())
+	fmt.Fprint(w, indexHTML(load(), func(name string) string { return "/incident/" + html.EscapeString(name) }))
 }
 
 func handleIncident(w http.ResponseWriter, r *http.Request) {
@@ -103,5 +123,29 @@ func handleIncident(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, page, fmt.Sprintf(`<div class="card"><div class="meta"><a href="/">&larr; back</a></div><pre>%s</pre></div>`, html.EscapeString(string(b))))
+	fmt.Fprint(w, incidentHTML(string(b), "/"))
+}
+
+// renderStatic writes index.html and incident/<title>.html under dir, with
+// relative links so the site works under any path prefix (GitHub Pages serves
+// a project site at /<repo>/).
+func renderStatic(dir string) error {
+	inc := load()
+	if err := os.MkdirAll(filepath.Join(dir, "incident"), 0o755); err != nil {
+		return err
+	}
+	index := indexHTML(inc, func(name string) string {
+		return "incident/" + html.EscapeString(strings.TrimSuffix(name, ".md")) + ".html"
+	})
+	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte(index), 0o644); err != nil {
+		return err
+	}
+	for _, i := range inc {
+		p := filepath.Join(dir, "incident", i.Title+".html")
+		if err := os.WriteFile(p, []byte(incidentHTML(i.Body, "../index.html")), 0o644); err != nil {
+			return err
+		}
+	}
+	slog.Info("rendered", "dir", dir, "incidents", len(inc))
+	return nil
 }
