@@ -85,6 +85,17 @@ start() {
   else
     echo "cloudflared not found; dashboard is local-only"
   fi
+
+  echo "== cron =="
+  # After the host has been down, OpenClaw backs the failing alert-intake job
+  # off to an hourly retry. Run it once now so it returns to its 30s cadence.
+  id=$(nemoclaw oncall exec -- sh -c 'openclaw cron list --json 2>/dev/null' 2>/dev/null | grep -v "Active gateway" \
+    | python3 -c 'import sys,json; print(next((j["id"] for j in json.load(sys.stdin)["jobs"] if j["name"]=="alert-intake"), ""))' 2>/dev/null)
+  if [ -n "$id" ] && nemoclaw oncall exec -- openclaw cron run "$id" >/dev/null 2>&1; then
+    echo "cron: alert-intake kicked"
+  else
+    echo "cron: not kicked (sandbox down or no alert-intake job)"
+  fi
 }
 
 stop() {

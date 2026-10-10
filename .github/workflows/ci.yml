@@ -1,0 +1,28 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        dir: [alert-relay, demo-app, deploy/dashboard]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ matrix.dir }}/go.mod
+      - run: cd ${{ matrix.dir }} && test -z "$(gofmt -l .)" && go vet ./... && go test -race ./...
+
+  investigate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: alert-relay/go.mod
+      - run: ./tests/investigate_test.sh

@@ -100,6 +100,8 @@ investigate_one() {
 alert_json="$1"
 alertname=$(printf '%s' "$alert_json" | jq -r '.alertname // "Unknown"')
 service=$(printf '%s' "$alert_json" | jq -r '.service // "demo-app"')
+# Sanitize like alertname: service lands in the runbook path and in queries.
+service=$(printf '%s' "$service" | tr -c 'A-Za-z0-9_-' '_')
 severity=$(printf '%s' "$alert_json" | jq -r '.severity // "warning"')
 summary=$(printf '%s' "$alert_json" | jq -r '.summary // ""')
 status=$(printf '%s' "$alert_json" | jq -r '.status // "firing"')

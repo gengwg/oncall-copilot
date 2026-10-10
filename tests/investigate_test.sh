@@ -88,11 +88,11 @@ for _ in $(seq 50); do
   sleep 0.1
 done
 
-post_alert() { # post_alert <alertname> [status]
+post_alert() { # post_alert <alertname> [status] [service]
   curl -sf -m 2 -X POST "http://127.0.0.1:$RELAY_PORT/alert" \
     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-    -d "$(jq -n --arg n "$1" --arg s "${2:-firing}" \
-      '{status:$s, alerts:[{status:$s, labels:{alertname:$n, severity:"critical", service:"demo-app"},
+    -d "$(jq -n --arg n "$1" --arg s "${2:-firing}" --arg svc "${3:-demo-app}" \
+      '{status:$s, alerts:[{status:$s, labels:{alertname:$n, severity:"critical", service:$svc},
         annotations:{summary:("summary for " + $n)}, startsAt:"2026-09-12T00:00:00Z"}]}')" >/dev/null
 }
 
@@ -179,6 +179,13 @@ if [ -e "$TMP/ws/escaped.md" ] || [ -e "$TMP/escaped.md" ]; then
 else
   ok "path traversal in alertname contained"
 fi
+
+# 9b. The service label lands in the runbook path and in queries; it gets the
+#     same treatment. The sanitized value is what reaches the report.
+post_alert EscapedService firing '../../escaped-svc'
+run_investigate
+check "service label sanitized before use" 'Service**: ______escaped-svc' \
+  "$(cat "$TMP/ws/memory/incidents/$(date -u +%Y-%m-%d)-EscapedService.md" 2>/dev/null)"
 
 # 10. An unwritable lock must degrade to running unlocked, not to a silent
 #     NO_REPLY on every tick.

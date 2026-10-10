@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -152,6 +154,35 @@ func TestEmptyTokenDisablesAuth(t *testing.T) {
 	}
 	if w, got := drain(t, ""); w.Code != http.StatusOK || len(got) != 1 {
 		t.Fatalf("GET /alerts with no auth: got %d with %d alerts, want 200 with 1", w.Code, len(got))
+	}
+}
+
+// Nothing may drain for hours; the queue keeps the newest maxQueue alerts
+// rather than growing until the relay is OOM-killed.
+func TestQueueKeepsNewestWhenFull(t *testing.T) {
+	withToken(t, "secret")
+	resetQueue(t)
+
+	var alerts []map[string]any
+	for i := 0; i < maxQueue+5; i++ {
+		alerts = append(alerts, map[string]any{"status": "firing",
+			"labels": map[string]string{"alertname": fmt.Sprintf("a%d", i)}})
+	}
+	body, _ := json.Marshal(map[string]any{"status": "firing", "alerts": alerts})
+	r := httptest.NewRequest(http.MethodPost, "/alert", bytes.NewReader(body))
+	r.Header.Set("Authorization", "Bearer secret")
+	w := httptest.NewRecorder()
+	handleAlert(w, r)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("POST /alert: got %d, want 202", w.Code)
+	}
+
+	_, got := drain(t, "secret")
+	if len(got) != maxQueue {
+		t.Fatalf("drained %d alerts, want %d", len(got), maxQueue)
+	}
+	if got[0].AlertName != "a5" || got[len(got)-1].AlertName != fmt.Sprintf("a%d", maxQueue+4) {
+		t.Fatalf("kept %s..%s, want the newest %d (a5..a%d)", got[0].AlertName, got[len(got)-1].AlertName, maxQueue, maxQueue+4)
 	}
 }
 
