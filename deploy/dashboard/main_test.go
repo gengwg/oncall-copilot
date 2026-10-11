@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The static site must work under a path prefix, so every link is relative.
@@ -49,5 +50,35 @@ func TestRenderStaticWritesRelativeSite(t *testing.T) {
 	}
 	if !strings.Contains(string(page), "&lt;b&gt;not html&lt;/b&gt;") {
 		t.Error("report body is not HTML-escaped")
+	}
+}
+
+func TestLoadOrdersNewestFirstAndByNameOnTies(t *testing.T) {
+	src := t.TempDir()
+	same := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	for n, mt := range map[string]time.Time{
+		"2026-09-30-DemoMemoryGrowth.md":  same.Add(time.Hour), // newest mtime, oldest name
+		"2026-10-01-DemoHighLatency.md":   same,
+		"2026-10-02-DemoHighErrorRate.md": same,
+	} {
+		p := filepath.Join(src, n)
+		if err := os.WriteFile(p, []byte("# "+n), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(p, mt, mt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	orig := *incDir
+	*incDir = src
+	t.Cleanup(func() { *incDir = orig })
+
+	var got []string
+	for _, i := range load() {
+		got = append(got, i.Name)
+	}
+	want := []string{"2026-09-30-DemoMemoryGrowth.md", "2026-10-02-DemoHighErrorRate.md", "2026-10-01-DemoHighLatency.md"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("order = %v, want %v", got, want)
 	}
 }

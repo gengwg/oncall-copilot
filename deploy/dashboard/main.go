@@ -65,7 +65,12 @@ func load() []incident {
 		title := strings.TrimSuffix(e.Name(), ".md")
 		out = append(out, incident{Name: e.Name(), Title: title, ModTime: fi.ModTime(), Body: string(b)})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ModTime.After(out[j].ModTime) })
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].ModTime.Equal(out[j].ModTime) {
+			return out[i].ModTime.After(out[j].ModTime)
+		}
+		return out[i].Name > out[j].Name
+	})
 	return out
 }
 
