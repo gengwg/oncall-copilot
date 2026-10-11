@@ -23,6 +23,13 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      # git does not keep mtimes; the dashboard sorts and labels reports by them
+      - run: |
+          for f in deploy/dashboard/incidents/*.md; do
+            touch -d "@$(git log -1 --format=%ct -- "$f")" "$f"
+          done
       - uses: actions/setup-go@v5
         with:
           go-version-file: deploy/dashboard/go.mod
