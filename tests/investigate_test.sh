@@ -66,7 +66,11 @@ class H(BaseHTTPRequestHandler):
         req = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))))
         with open(sys.argv[2], 'w') as f:
             f.write(req['messages'][0]['content'])
+        # Nemotron thinks out loud and often echoes the reply template before
+        # its real answer; the parser must take the answer, not the template.
         body = json.dumps({"choices": [{"message": {"content":
+            "Need to output in format:\nROOT CAUSE: <2 sentences>\nCONFIDENCE: <high|medium|low>\n"
+            "RULED OUT: <cause - evidence against it>\nACTION: <1 sentence>\n\n"
             "ROOT CAUSE: Injected upstream dial timeouts are failing roughly half of all requests reaching the service, "
             "while the process itself remains entirely healthy, which rules out local resource exhaustion and points "
             "squarely at an unreachable downstream dependency somewhere beyond the pod boundary.\n"

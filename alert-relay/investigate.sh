@@ -236,15 +236,17 @@ RULED OUT: <cause - evidence against it>; <cause - evidence against it>
 ACTION: <1 sentence>"
 
 analysis=$(jq -n --arg m "$MODEL" --arg p "$prompt" \
-  '{model:$m, messages:[{role:"user",content:$p}], max_tokens:600}' \
+  '{model:$m, messages:[{role:"user",content:$p}], max_tokens:1500}' \
   | curl -sf -m 150 "$INFERENCE_URL" \
       -H "Authorization: Bearer $NEBIUS_API_KEY" -H "Content-Type: application/json" \
       -d @- 2>/dev/null | jq -r '.choices[0].message.content // "analysis unavailable"')
 
-rootcause=$(printf '%s' "$analysis" | sed -n 's/^ROOT CAUSE: *//p' | head -1)
-action=$(printf '%s' "$analysis" | sed -n 's/^ACTION: *//p' | head -1)
-confidence=$(printf '%s' "$analysis" | sed -n 's/^CONFIDENCE: *//p' | head -1)
-ruled_out=$(printf '%s' "$analysis" | sed -n 's/^RULED OUT: *//p' | head -1)
+# Last match, not first: Nemotron reasons in the open and often echoes the
+# reply template ("ROOT CAUSE: <2 sentences>") before its real answer.
+rootcause=$(printf '%s' "$analysis" | sed -n 's/^ROOT CAUSE: *//p' | tail -1)
+action=$(printf '%s' "$analysis" | sed -n 's/^ACTION: *//p' | tail -1)
+confidence=$(printf '%s' "$analysis" | sed -n 's/^CONFIDENCE: *//p' | tail -1)
+ruled_out=$(printf '%s' "$analysis" | sed -n 's/^RULED OUT: *//p' | tail -1)
 [ -z "$rootcause" ] && rootcause="$analysis"
 [ -z "$action" ] && action="See runbook."
 [ -z "$confidence" ] && confidence="n/a"
