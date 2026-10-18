@@ -170,8 +170,8 @@ https://gengwg.github.io/oncall-copilot/
 > create` is denied too, even with a public image (so bypassing the registry
 > via ghcr.io would not help). This is an account entitlement, not a script
 > or region problem; ask the organizers or Nebius support to enable Container
-> Registry and AI Endpoints on tenant `pink-panther-tenant-jhc`. Until then
-> the quick tunnel from this machine is the demo URL.
+> Registry and AI Endpoints on tenant `pink-panther-tenant-jhc`. Not needed for
+> the submission: GitHub Pages is the demo URL.
 
 ## 7. Demonstration video URL (required, <= 3 min, public YouTube)
 
