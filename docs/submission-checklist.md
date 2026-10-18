@@ -184,7 +184,7 @@ https://www.youtube.com/watch?v=HF232lMSUgE
 > you". oEmbed also answers for unlisted videos, so confirm the visibility is
 > Public in YouTube Studio.
 >
-> Video: `docs/media/demo.mp4`, 117s, 1920x1080 h264+AAC, piper TTS narration
+> Video: `docs/media/demo.mp4`, 124s, 1920x1080 h264+AAC, ElevenLabs v4 narration
 > naming Token Factory + Nemotron + NemoClaw/OpenShell + Tavily. A real
 > screencast of the live pipeline with Telegram Desktop on screen: chaos
 > injected, alert fires, the copilot investigates, the brief lands. Upload as

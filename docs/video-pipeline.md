@@ -1,6 +1,6 @@
 # Video pipeline (as built)
 
-Real screencast plus rendered cards and piper narration. The earlier version of
+Real screencast plus rendered cards and ElevenLabs narration. The earlier version of
 this doc described a headless slideshow of static PNGs; that was a workaround
 for not having screen capture, and it showed — the Telegram UI never appeared.
 
@@ -22,7 +22,7 @@ recorder works and has no length cap on Shell 50:
 ## Build
 
 ```bash
-./docs/narrate-demo.sh                    # piper TTS -> /tmp/opencode/video/v3/narr
+./docs/narrate-demo.sh                    # ElevenLabs v4 via OpenRouter -> /tmp/opencode/video/v3/narr
 ./docs/build-video.sh ~/Videos/Screencasts/<file>.mp4 docs/media/demo.mp4
 ```
 
@@ -37,7 +37,7 @@ against the new take's elapsed markers before rebuilding.
 
 ## Rules checklist
 
-- duration 117s (< 3:00)
+- duration 124s (< 3:00)
 - narration names Token Factory, Nemotron, NemoClaw/OpenShell, Tavily
-- audio is piper TTS only (no third-party music)
+- audio is ElevenLabs v4 narration only (no third-party music); needs OPENROUTER_API_KEY in .env
 - shows the project working end to end, including the Telegram page
