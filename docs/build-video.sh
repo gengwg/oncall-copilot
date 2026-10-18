@@ -21,7 +21,7 @@ CARD_B=14    # stack, over the setup line
 CARD_END=8.5
 
 command -v ffmpeg >/dev/null || { echo "ffmpeg required" >&2; exit 1; }
-for s in 1-hook 2-setup 3-chaos 4-alert 5-invest 6-page 7-close; do
+for s in 1-hook 2-setup 3-chaos 3b-wait 4-alert 5-invest 6-page 7-close; do
   [ -f "$NARR/$s.wav" ] || { echo "missing narration $NARR/$s.wav (run docs/narrate-demo.sh)" >&2; exit 1; }
 done
 
@@ -35,11 +35,12 @@ at() { python3 -c "print(int(($1) * 1000))"; }  # seconds -> ms for adelay
 # Narration anchors, in absolute video seconds.
 A1=0.4                                    # hook, over the title card
 A2=$(python3 -c "print($CARD_A + 0.4)")   # stack card
-A3=$(python3 -c "print($OFF + 7)")        # chaos injected
-A4=$(python3 -c "print($OFF + 21.5)")     # alert fires
-A5=$(python3 -c "print($OFF + 27)")       # investigation
-A6=$(python3 -c "print($OFF + 40.7)")     # the page lands
-A7=$(python3 -c "print($FOOT + 49 + 0.5)")  # end card
+A3=$(python3 -c "print($OFF + 7.5)")      # chaos injected
+A3B=$(python3 -c "print($OFF + 22)")      # waiting on the alert rule
+A4=$(python3 -c "print($OFF + 49.2)")     # alert fires
+A5=$(python3 -c "print($OFF + 55.5)")     # investigation
+A6=$(python3 -c "print($OFF + 71.8)")     # the page lands in Telegram
+A7=$(python3 -c "print($FOOT + 81.2 + 0.5)")  # end card
 
 ffmpeg -y -loglevel error \
   -loop 1 -t "$CARD_A" -i "$WORK/card-title.png" \
@@ -47,8 +48,8 @@ ffmpeg -y -loglevel error \
   -ss "$CLIP_START" -i "$SRC" \
   -loop 1 -t "$CARD_END" -i "$WORK/card-end.png" \
   -i "$NARR/1-hook.wav" -i "$NARR/2-setup.wav" -i "$NARR/3-chaos.wav" \
-  -i "$NARR/4-alert.wav" -i "$NARR/5-invest.wav" -i "$NARR/6-page.wav" \
-  -i "$NARR/7-close.wav" \
+  -i "$NARR/3b-wait.wav" -i "$NARR/4-alert.wav" -i "$NARR/5-invest.wav" \
+  -i "$NARR/6-page.wav" -i "$NARR/7-close.wav" \
   -filter_complex "\
 [0:v]scale=1920:1080,setsar=1,fps=30,format=yuv420p[v0];\
 [1:v]scale=1920:1080,setsar=1,fps=30,format=yuv420p[v1];\
@@ -59,11 +60,12 @@ pad=1920:1080:(ow-iw)/2:(oh-ih)/2:color=0x0d1117,setsar=1,fps=30,format=yuv420p[
 [4:a]adelay=$(at $A1)|$(at $A1)[a1];\
 [5:a]adelay=$(at $A2)|$(at $A2)[a2];\
 [6:a]adelay=$(at $A3)|$(at $A3)[a3];\
-[7:a]adelay=$(at $A4)|$(at $A4)[a4];\
-[8:a]adelay=$(at $A5)|$(at $A5)[a5];\
-[9:a]adelay=$(at $A6)|$(at $A6)[a6];\
-[10:a]adelay=$(at $A7)|$(at $A7)[a7];\
-[a1][a2][a3][a4][a5][a6][a7]amix=inputs=7:normalize=0:dropout_transition=0[a]" \
+[7:a]adelay=$(at $A3B)|$(at $A3B)[a3b];\
+[8:a]adelay=$(at $A4)|$(at $A4)[a4];\
+[9:a]adelay=$(at $A5)|$(at $A5)[a5];\
+[10:a]adelay=$(at $A6)|$(at $A6)[a6];\
+[11:a]adelay=$(at $A7)|$(at $A7)[a7];\
+[a1][a2][a3][a3b][a4][a5][a6][a7]amix=inputs=8:normalize=0:dropout_transition=0[a]" \
   -map "[v]" -map "[a]" \
   -c:v libx264 -preset medium -crf 20 -pix_fmt yuv420p \
   -c:a aac -b:a 160k -movflags +faststart \

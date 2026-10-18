@@ -16,7 +16,7 @@ recorder works and has no length cap on Shell 50:
 2. `Ctrl+Alt+Shift+R` to start.
 3. Run `./docs/demo-drive.sh` — it paces the real pipeline for camera: system
    check, chaos injection, the alert firing with elapsed timestamps, the
-   investigation, the delivered brief, then clears the chaos. About 50s.
+   investigation, the delivered brief, then clears the chaos. About 80s.
 4. `Ctrl+Alt+Shift+R` to stop. Saves to `~/Videos/Screencasts/`.
 
 ## Build
@@ -37,7 +37,7 @@ against the new take's elapsed markers before rebuilding.
 
 ## Rules checklist
 
-- duration 84s (< 3:00)
+- duration 117s (< 3:00)
 - narration names Token Factory, Nemotron, NemoClaw/OpenShell, Tavily
 - audio is piper TTS only (no third-party music)
 - shows the project working end to end, including the Telegram page
