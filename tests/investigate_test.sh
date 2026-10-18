@@ -62,11 +62,14 @@ import json, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 class H(BaseHTTPRequestHandler):
     def do_POST(self):
-        self.rfile.read(int(self.headers.get('Content-Length', 0)))
+        req = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))))
+        with open(sys.argv[2], 'w') as f:
+            f.write(req['messages'][0]['content'])
         body = json.dumps({"choices": [{"message": {"content":
             "ROOT CAUSE: Injected upstream dial timeouts are failing roughly half of all requests reaching the service, "
             "while the process itself remains entirely healthy, which rules out local resource exhaustion and points "
             "squarely at an unreachable downstream dependency somewhere beyond the pod boundary.\n"
+            "CONFIDENCE: high - upstream dial timeout in every error log line\n"
             "ACTION: Run /chaos/stop on demo-app, then verify the Kubernetes service endpoints and NetworkPolicy rules "
             "for every downstream dependency it calls."}}]}).encode()
         self.send_response(200)
@@ -77,7 +80,7 @@ class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
 HTTPServer(('127.0.0.1', int(sys.argv[1])), H).serve_forever()
 EOF
-python3 "$TMP/infer.py" "$INFER_PORT" & INFER_PID=$!
+python3 "$TMP/infer.py" "$INFER_PORT" "$TMP/last_prompt" & INFER_PID=$!
 
 # --- real relay ---
 (cd alert-relay && CGO_ENABLED=0 go build -o "$TMP/alert-relay" .) || { echo "relay build failed"; exit 1; }
@@ -88,12 +91,13 @@ for _ in $(seq 50); do
   sleep 0.1
 done
 
-post_alert() { # post_alert <alertname> [status] [service]
+post_alert() { # post_alert <alertname> [status] [service] [startsAt]
   curl -sf -m 2 -X POST "http://127.0.0.1:$RELAY_PORT/alert" \
     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
     -d "$(jq -n --arg n "$1" --arg s "${2:-firing}" --arg svc "${3:-demo-app}" \
+      --arg at "${4:-2026-09-12T00:00:00Z}" \
       '{status:$s, alerts:[{status:$s, labels:{alertname:$n, severity:"critical", service:$svc},
-        annotations:{summary:("summary for " + $n)}, startsAt:"2026-09-12T00:00:00Z"}]}')" >/dev/null
+        annotations:{summary:("summary for " + $n)}, startsAt:$at}]}')" >/dev/null
 }
 
 run_investigate() { # run_investigate [env assignments...] ; sets OUT/ERR/RC
@@ -124,11 +128,24 @@ post_alert DemoHighErrorRate
 run_investigate
 check "firing alert -> brief names the alert" "ALERT: DemoHighErrorRate" "$OUT"
 check "firing alert -> brief carries the cause" "Likely cause: Injected upstream dial timeouts" "$OUT"
+check "firing alert -> brief carries the confidence" "Confidence: high - upstream dial timeout" "$OUT"
+check "first occurrence -> no previous incident" "Previous: none on file" "$OUT"
 if [ -f "$TMP/ws/memory/incidents/$(date -u +%Y-%m-%d)-DemoHighErrorRate.md" ]; then
   ok "firing alert -> incident report written"
 else
   bad "firing alert -> incident report written" "no report in $TMP/ws/memory/incidents: $(ls "$TMP/ws/memory/incidents" 2>&1)"
 fi
+
+# 2b. A repeat alert feeds the last report's root cause to the model.
+mkdir -p "$TMP/ws/memory/incidents"
+printf '# DemoHighLatency\n\n## Root cause\nInjected latency chaos, cleared at 23:29Z.\n\n## Evidence\n- up: 1\n' \
+  > "$TMP/ws/memory/incidents/2026-10-10-DemoHighLatency.md"
+post_alert DemoHighLatency
+run_investigate
+check "repeat alert -> brief names the previous date" "Previous: 2026-10-10" "$OUT"
+check "repeat alert -> prompt carries the previous cause" \
+  "PREVIOUS INCIDENT FOR THIS ALERT (2026-10-10):"$'\n'"Injected latency chaos, cleared at 23:29Z." \
+  "$(cat "$TMP/last_prompt")"
 
 # 3. Token drift must be loud. Before the fix this was indistinguishable from
 #    an empty queue and alerts silently piled up in the relay forever.
@@ -254,6 +271,16 @@ if [ -f "$TMP/ws/memory/incidents/$(date -u +%Y-%m-%d)-DemoHighErrorRate.md" ] \
   ok "broken collectors -> report carries the warning"
 else
   bad "broken collectors -> report carries the warning" "no warning banner in the filed report"
+fi
+
+# 13. The brief reports how long after the alert fired it was ready.
+post_alert DemoHighLatency firing demo-app "$(date -u -d '-90 sec' +%Y-%m-%dT%H:%M:%SZ)"
+run_investigate
+ttb=$(printf '%s' "$OUT" | sed -n 's/^Briefed \([0-9]*\)s after the alert fired$/\1/p')
+if [ -n "$ttb" ] && [ "$ttb" -ge 90 ] && [ "$ttb" -lt 120 ]; then
+  ok "brief reports time to brief"
+else
+  bad "brief reports time to brief" "got '${ttb}' from: $OUT"
 fi
 
 echo

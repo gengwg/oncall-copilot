@@ -10,7 +10,8 @@ Instead of waking you with a raw alert, the copilot does the first five minutes
 of incident response for you: confirms the alert against live metrics, reads
 the error logs, cross-references your runbook and the web, and reasons about
 root cause — then pages you with a digested brief and files an incident report
-it remembers for next time.
+it remembers for next time. When you open the page, the root cause is already
+there, and the brief says how many seconds after the alert fired it was ready.
 
 ## Why it's Personal AI
 

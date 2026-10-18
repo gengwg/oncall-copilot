@@ -116,11 +116,21 @@ mkdir -p "$INCIDENTS"
 
 runbook=$(cat "$RUNBOOKS/$service.md" 2>/dev/null || echo "no runbook")
 
+# Latest earlier report for this alert, so the model can say "seen before".
+prev=$(ls "$INCIDENTS"/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-"$alert_slug".md 2>/dev/null | tail -1)
+prev_seen="none on file"
+prev_cause="none"
+if [ -n "$prev" ]; then
+  prev_seen=$(basename "$prev" | cut -c1-10)
+  prev_cause=$(awk '/^## /{f=($0=="## Root cause"); next} f' "$prev" | clip 400)
+fi
+
 # --- evidence collection (scenario-aware, read-only, bounded) ---
 # Anchor the log window to the alert's start so repeated runs don't re-read the
 # same stale lines.
 starts_at=$(printf '%s' "$alert_json" | jq -r '.starts_at // empty')
 lookback=15
+start_s=0
 if [ -n "$starts_at" ]; then
   start_s=$(date -d "$starts_at" +%s 2>/dev/null || echo 0)
   now_s=$(date +%s)
@@ -191,7 +201,7 @@ if [ -n "${TAVILY_API_KEY:-}" ] && [ -n "$err_string" ] && [ "$err_string" != "n
 fi
 
 # --- Nemotron analysis ---
-prompt="You are an SRE analyzing a live alert. Given the alert, live evidence, and web context, write a 2-sentence root-cause assessment and 1 suggested first action. Be specific; use the numbers.
+prompt="You are an SRE analyzing a live alert. Given the alert, live evidence, and web context, write a 2-sentence root-cause assessment and 1 suggested first action. Be specific; use the numbers. If the previous incident had the same cause, say so.
 
 ALERT: $alertname ($severity) on $service — $summary
 
@@ -207,11 +217,15 @@ $err_logs
 WEB CONTEXT (for the error string):
 $web_context
 
+PREVIOUS INCIDENT FOR THIS ALERT ($prev_seen):
+$prev_cause
+
 RUNBOOK EXCERPT:
 $(printf '%s' "$runbook" | head -20)
 
-Reply format (plain text, two lines):
+Reply format (plain text, three lines):
 ROOT CAUSE: <2 sentences>
+CONFIDENCE: <high|medium|low> - <the one evidence item it rests on>
 ACTION: <1 sentence>"
 
 analysis=$(jq -n --arg m "$MODEL" --arg p "$prompt" \
@@ -222,8 +236,14 @@ analysis=$(jq -n --arg m "$MODEL" --arg p "$prompt" \
 
 rootcause=$(printf '%s' "$analysis" | sed -n 's/^ROOT CAUSE: *//p' | head -1)
 action=$(printf '%s' "$analysis" | sed -n 's/^ACTION: *//p' | head -1)
+confidence=$(printf '%s' "$analysis" | sed -n 's/^CONFIDENCE: *//p' | head -1)
 [ -z "$rootcause" ] && rootcause="$analysis"
 [ -z "$action" ] && action="See runbook."
+[ -z "$confidence" ] && confidence="n/a"
+
+# Alert start -> brief ready: the head start the page gives a human.
+ttb="n/a"
+[ "${start_s:-0}" -gt 0 ] && ttb="$(( $(date +%s) - start_s ))s"
 
 # --- incident report ---
 # Build with printf '%s' per field — never expand untrusted values (Tavily web
@@ -234,7 +254,10 @@ action=$(printf '%s' "$analysis" | sed -n 's/^ACTION: *//p' | head -1)
   printf -- '- **Service**: %s\n' "$service"
   printf -- '- **Severity**: %s\n' "$severity"
   printf -- '- **Status**: firing\n'
-  printf -- '- **Summary**: %s\n\n' "$summary"
+  printf -- '- **Summary**: %s\n' "$summary"
+  printf -- '- **Time to brief**: %s after the alert fired\n' "$ttb"
+  printf -- '- **Previous**: %s\n' "$prev_seen"
+  printf -- '- **Confidence**: %s\n\n' "$confidence"
   printf '## Root cause\n%s\n\n' "$rootcause"
   printf '## Evidence\n'
   printf -- '- up: %s\n' "$up"
@@ -250,9 +273,10 @@ action=$(printf '%s' "$analysis" | sed -n 's/^ACTION: *//p' | head -1)
 } > "$report"
 
 # --- Telegram brief on stdout (cron announce delivers it) ---
-printf 'ALERT: %s (%s)\nService: %s\nLikely cause: %s\nEvidence: err_ratio=%s heap=%s latency_mode=%s\nSuggested: %s\n' \
+printf 'ALERT: %s (%s)\nService: %s\nLikely cause: %s\nConfidence: %s\nPrevious: %s\nEvidence: err_ratio=%s heap=%s latency_mode=%s\nSuggested: %s\nBriefed %s after the alert fired\n' \
   "$alertname" "$severity" "$service" "$(printf '%s' "$rootcause" | clip 200)" \
-  "$err_ratio" "$heap" "$lat_mode" "$(printf '%s' "$action" | clip 120)"
+  "$(printf '%s' "$confidence" | clip 120)" "$prev_seen" \
+  "$err_ratio" "$heap" "$lat_mode" "$(printf '%s' "$action" | clip 120)" "$ttb"
 }
 
 briefed=0
