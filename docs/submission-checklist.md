@@ -176,13 +176,14 @@ https://gengwg.github.io/oncall-copilot/
 ## 7. Demonstration video URL (required, <= 3 min, public YouTube)
 
 ```
-https://www.youtube.com/watch?v=HF232lMSUgE
+https://www.youtube.com/watch?v=0AGsLXP4XEY
 ```
 
-> Re-recorded 2026-10-17 for the v1.2 brief; replaces `7L6E7PknOUk`. oEmbed
-> returns 200 with the title "OnCall Copilot — investigates before it pages
-> you". oEmbed also answers for unlisted videos, so confirm the visibility is
-> Public in YouTube Studio.
+> 2026-10-17 take with ElevenLabs narration; replaces `HF232lMSUgE` (piper) and
+> `7L6E7PknOUk`. oEmbed returns 200, but the YouTube title is still "demo":
+> rename it to "OnCall Copilot — investigates before it pages you". oEmbed also
+> answers for unlisted videos, so confirm the visibility is Public in YouTube
+> Studio.
 >
 > Video: `docs/media/demo.mp4`, 124s, 1920x1080 h264+AAC, ElevenLabs v4 narration
 > naming Token Factory + Nemotron + NemoClaw/OpenShell + Tavily. A real
