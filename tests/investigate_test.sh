@@ -44,6 +44,7 @@ cat > "$TMP/ws/skills/promql-query/scripts/query.sh" <<'EOF'
 # 0/0 over a window with no traffic: Prometheus returns a real NaN sample.
 [ "${STUB_PROM_NAN:-0}" = "1" ] && { echo '{"value":"NaN"}'; exit 0; }
 case "$2" in
+  *ALERTS_FOR_STATE*) [ -n "${STUB_PENDING_AT:-}" ] && echo "{\"value\":\"$STUB_PENDING_AT\"}" ;;
   *heap*) echo '{"value":"104857600"}' ;;
   *latency_mode*) echo '{"value":"1"}' ;;
   *) echo '{"value":"1"}' ;;
@@ -70,6 +71,7 @@ class H(BaseHTTPRequestHandler):
             "while the process itself remains entirely healthy, which rules out local resource exhaustion and points "
             "squarely at an unreachable downstream dependency somewhere beyond the pod boundary.\n"
             "CONFIDENCE: high - upstream dial timeout in every error log line\n"
+            "RULED OUT: memory exhaustion - heap is flat at 100MB\n"
             "ACTION: Run /chaos/stop on demo-app, then verify the Kubernetes service endpoints and NetworkPolicy rules "
             "for every downstream dependency it calls."}}]}).encode()
         self.send_response(200)
@@ -273,7 +275,7 @@ else
   bad "broken collectors -> report carries the warning" "no warning banner in the filed report"
 fi
 
-# 13. The brief reports how long after the alert fired it was ready.
+# 14. The brief reports how long after the alert fired it was ready.
 post_alert DemoHighLatency firing demo-app "$(date -u -d '-90 sec' +%Y-%m-%dT%H:%M:%SZ)"
 run_investigate
 ttb=$(printf '%s' "$OUT" | sed -n 's/^Briefed \([0-9]*\)s after the alert fired$/\1/p')
@@ -282,6 +284,21 @@ if [ -n "$ttb" ] && [ "$ttb" -ge 90 ] && [ "$ttb" -lt 120 ]; then
 else
   bad "brief reports time to brief" "got '${ttb}' from: $OUT"
 fi
+
+# 15. With the rule's pending time known, the brief also counts from when the
+#     condition began, and the report lays out the timeline.
+post_alert DemoHighLatency firing demo-app "$(date -u -d '-90 sec' +%Y-%m-%dT%H:%M:%SZ)"
+pending_at=$(date -d '-150 sec' +%s)
+run_investigate STUB_PENDING_AT="$pending_at"
+since=$(printf '%s' "$OUT" | sed -n 's/^Briefed [0-9]*s after the alert fired, \([0-9]*\)s after the condition began$/\1/p')
+if [ -n "$since" ] && [ "$since" -ge 150 ] && [ "$since" -lt 180 ]; then
+  ok "brief counts from the condition start"
+else
+  bad "brief counts from the condition start" "got '${since}' from: $OUT"
+fi
+report=$(cat "$TMP/ws/memory/incidents/$(date -u +%Y-%m-%d)-DemoHighLatency.md")
+check "report lists ruled-out causes" $'## Ruled out\nmemory exhaustion - heap is flat at 100MB' "$report"
+check "report timeline has the condition start" "- condition true: $(date -u -d "@$pending_at" +%H:%M:%SZ)" "$report"
 
 echo
 echo "passed: $PASS  failed: $FAIL"
