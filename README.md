@@ -66,6 +66,7 @@ demo-app (/chaos) -> Prometheus alert -> Alertmanager --webhook--> alert-relay
   own service's metrics to reuse it
 - `skills/` — OpenClaw skills: `promql-query`, `logql-query`
 - `memory/` — agent knowledge layer (runbooks, incident reports)
+- `workspace/TOOLS.md` — on-call notes OpenClaw loads into every chat session
 - `deploy/minikube/` — observability stack (Prometheus, Alertmanager, Loki, Grafana, Alloy)
 - `deploy/dashboard/` — incident dashboard; `-render` writes it as static pages for GitHub Pages
   (https://gengwg.github.io/oncall-copilot/). `deploy/sync-incidents.sh` pushes each new report to the repo, which republishes the feed

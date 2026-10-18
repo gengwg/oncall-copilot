@@ -31,6 +31,11 @@ for f in $(find memory -type f); do
   put "$f" "$WORKSPACE/$f"
 done
 
+echo "== workspace =="
+# Loaded into every chat session at startup, unlike memory/, which the agent
+# only reaches through memory search.
+put workspace/TOOLS.md "$WORKSPACE/TOOLS.md"
+
 echo "== investigation scripts =="
 put alert-relay/investigate.sh "$WORKSPACE/bin/investigate.sh"
 nemoclaw "$SB" exec -- chmod +x "$WORKSPACE/bin/investigate.sh" >/dev/null
