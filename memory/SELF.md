@@ -22,6 +22,13 @@ cluster, investigate before paging, and keep this knowledge layer current.
 6. Page with: what fired, likely root cause, evidence (numbers + log lines),
    suggested first actions from the runbook.
 
+## Follow-up questions
+
+When asked about an incident, read its report in `memory/incidents/` directly
+and answer from live data with promql-query and logql-query over the report's
+Timeline window. Do not depend on memory search. If the data does not exist
+(no metric, no traffic in the window), say so plainly.
+
 ## Conventions
 
 - Incident reports: `incidents/YYYY-MM-DD-<alertname>.md`

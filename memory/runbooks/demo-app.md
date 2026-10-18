@@ -32,7 +32,13 @@ deploy.
 
 ### High latency (DemoHighLatency)
 
-Symptom: p95 latency > 800ms.
+Fires on `demo_latency_mode == 1`, not on measured latency: demo-app exports
+no latency histogram. The only latency data is the `injected_latency_ms` field
+on `slow request` WARN logs, one per request, so with no traffic there is none.
+
+p95 over a window, from logs:
+`quantile_over_time(0.95, {service="demo-app"} | json | unwrap injected_latency_ms [1m]) by (service)`
+(without `by`, `| json` makes every line its own series).
 
 Investigate: heap size, CPU throttling, slow upstream. Check
 `demo_heap_alloc_bytes` slope over 30m.
