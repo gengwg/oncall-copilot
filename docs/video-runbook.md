@@ -5,7 +5,7 @@ Prep: terminal left, **Telegram Desktop** right (not phone). Narration cues in [
 ## Scene 0 — before you hit record
 
 ```bash
-cd ~/projects/nebius-hackathon
+cd ~/projects/oncall-copilot
 bash deploy/demo-services.sh start        # everything up + public tunnel
 bash deploy/demo-services.sh status       # copy this tunnel URL to browser
 ```
