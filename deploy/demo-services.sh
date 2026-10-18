@@ -87,10 +87,10 @@ start() {
   fi
 
   echo "== cron =="
-  # After the host has been down, OpenClaw backs the failing alert-intake job
-  # off to an hourly retry. Run it once now so it returns to its 30s cadence.
-  id=$(nemoclaw oncall exec -- sh -c 'openclaw cron list --json 2>/dev/null' 2>/dev/null | grep -v "Active gateway" \
-    | python3 -c 'import sys,json; print(next((j["id"] for j in json.load(sys.stdin)["jobs"] if j["name"]=="alert-intake"), ""))' 2>/dev/null)
+  # stop disables the job; re-enable it, then run it once so a job that OpenClaw
+  # backed off to an hourly retry returns to its 30s cadence.
+  id=$(cron_id)
+  [ -n "$id" ] && nemoclaw oncall exec -- openclaw cron enable "$id" >/dev/null 2>&1
   if [ -n "$id" ] && nemoclaw oncall exec -- openclaw cron run "$id" >/dev/null 2>&1; then
     echo "cron: alert-intake kicked"
   else
@@ -98,7 +98,16 @@ start() {
   fi
 }
 
+cron_id() {
+  nemoclaw oncall exec -- sh -c 'openclaw cron list --all --json 2>/dev/null' 2>/dev/null | grep -v "Active gateway" \
+    | python3 -c 'import sys,json; print(next((j["id"] for j in json.load(sys.stdin)["jobs"] if j["name"]=="alert-intake"), ""))' 2>/dev/null
+}
+
 stop() {
+  # With the relay gone every 30s run fails, and OpenClaw pages each failure to
+  # Telegram. Pause the watcher with the rest of the demo.
+  id=$(cron_id)
+  [ -n "$id" ] && nemoclaw oncall exec -- openclaw cron disable "$id" >/dev/null 2>&1 && echo "cron: alert-intake disabled"
   deploy/minikube/forwards.sh stop 2>/dev/null
   for p in relay sync dash tunnel; do
     [ -f "$RUN/$p.pid" ] && kill "$(cat "$RUN/$p.pid")" 2>/dev/null && rm -f "$RUN/$p.pid"
@@ -118,7 +127,7 @@ status() {
   fi
   echo "dashboard:"; curl -sf -m 2 "localhost:$DASH_PORT/healthz" >/dev/null && echo "  http://localhost:$DASH_PORT" || echo "  DOWN"
   [ -f "$RUN/tunnel.log" ] && echo "tunnel: $(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$RUN/tunnel.log" | head -1)"
-  echo "cron:"; nemoclaw oncall exec -- sh -c 'openclaw cron list --json 2>/dev/null | python3 -c "import sys,json; j=json.load(sys.stdin)[\"jobs\"][0]; print(\"  \", j[\"name\"], j[\"state\"].get(\"lastRunStatus\"))"' 2>/dev/null | grep -v "Active gateway"
+  echo "cron:"; nemoclaw oncall exec -- sh -c 'openclaw cron list --all --json 2>/dev/null | python3 -c "import sys,json; j=json.load(sys.stdin)[\"jobs\"][0]; print(\"  \", j[\"name\"], j[\"state\"].get(\"lastRunStatus\") if j[\"enabled\"] else \"disabled\")"' 2>/dev/null | grep -v "Active gateway"
 }
 
 case "${1:-status}" in

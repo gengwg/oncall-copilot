@@ -47,7 +47,7 @@ nemoclaw "$SB" exec -- openclaw config set env.vars.LOKI_URL '"http://172.18.0.1
 nemoclaw "$SB" gateway restart --quiet
 
 # Idempotent re-runs: drop any prior alert-intake job (agentTurn or command).
-nemoclaw "$SB" exec -- sh -c "openclaw cron list --json 2>/dev/null | python3 -c 'import sys,json; [print(x[\"id\"]) for x in json.load(sys.stdin)[\"jobs\"] if x[\"name\"]==\"alert-intake\"]' | while read -r id; do openclaw cron rm \"\$id\" 2>/dev/null; done" >/dev/null 2>&1 || true
+nemoclaw "$SB" exec -- sh -c "openclaw cron list --all --json 2>/dev/null | python3 -c 'import sys,json; [print(x[\"id\"]) for x in json.load(sys.stdin)[\"jobs\"] if x[\"name\"]==\"alert-intake\"]' | while read -r id; do openclaw cron rm \"\$id\" 2>/dev/null; done" >/dev/null 2>&1 || true
 
 # The timeout must exceed the script's worst case (Nemotron -m 150 + Tavily
 # -m 20 + the Prom/Loki round trips), or the cron kills the run after the queue
