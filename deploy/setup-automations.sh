@@ -36,6 +36,17 @@ fi
 RELAY_TOKEN="${RELAY_TOKEN:?could not read relay-token secret from the observability namespace and RELAY_TOKEN is unset}"
 WORKSPACE=/sandbox/.openclaw/workspace
 
+# Chat follow-ups ("what was latency during that incident?") need the query
+# skills. Onboarding leaves them disabled, and the chat session has no
+# PROMETHEUS_URL/LOKI_URL (investigate.sh sets its own).
+skill_config() {
+  nemoclaw "$SB" exec -- openclaw config set skills.entries.promql-query.enabled true
+  nemoclaw "$SB" exec -- openclaw config set skills.entries.promql-query.env.PROMETHEUS_URL http://172.18.0.1:19090
+  nemoclaw "$SB" exec -- openclaw config set skills.entries.logql-query.enabled true
+  nemoclaw "$SB" exec -- openclaw config set skills.entries.logql-query.env.LOKI_URL http://172.18.0.1:13100
+}
+skill_config
+
 # Idempotent re-runs: drop any prior alert-intake job (agentTurn or command).
 nemoclaw "$SB" exec -- sh -c "openclaw cron list --json 2>/dev/null | python3 -c 'import sys,json; [print(x[\"id\"]) for x in json.load(sys.stdin)[\"jobs\"] if x[\"name\"]==\"alert-intake\"]' | while read -r id; do openclaw cron rm \"\$id\" 2>/dev/null; done" >/dev/null 2>&1 || true
 
