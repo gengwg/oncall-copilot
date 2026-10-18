@@ -139,6 +139,12 @@ if [ -n "$starts_at" ]; then
   [ "$lookback" -lt 5 ] && lookback=5
 fi
 
+# When the rule's condition first held, before its `for:` wait: the closest
+# signal we have to when the failure began.
+pending_s=$($PROM instant "ALERTS_FOR_STATE{alertname=\"$alert_slug\"}" 2>/dev/null | jq -r '.value' | head -1)
+pending_s="${pending_s%.*}"
+case "$pending_s" in ""|*[!0-9]*) pending_s=0 ;; esac
+
 # Reset per-alert so evidence from the previous alert in the batch can't leak in.
 heap_trend=""
 evidence_broken=""
@@ -201,7 +207,7 @@ if [ -n "${TAVILY_API_KEY:-}" ] && [ -n "$err_string" ] && [ "$err_string" != "n
 fi
 
 # --- Nemotron analysis ---
-prompt="You are an SRE analyzing a live alert. Given the alert, live evidence, and web context, write a 2-sentence root-cause assessment and 1 suggested first action. Be specific; use the numbers. If the previous incident had the same cause, say so.
+prompt="You are an SRE analyzing a live alert. Given the alert, live evidence, and web context, write a 2-sentence root-cause assessment, up to 2 other plausible causes the evidence rules out, and 1 suggested first action. Be specific; use the numbers. If the previous incident had the same cause, say so.
 
 ALERT: $alertname ($severity) on $service — $summary
 
@@ -223,27 +229,37 @@ $prev_cause
 RUNBOOK EXCERPT:
 $(printf '%s' "$runbook" | head -20)
 
-Reply format (plain text, three lines):
+Reply format (plain text, four lines):
 ROOT CAUSE: <2 sentences>
 CONFIDENCE: <high|medium|low> - <the one evidence item it rests on>
+RULED OUT: <cause - evidence against it>; <cause - evidence against it>
 ACTION: <1 sentence>"
 
 analysis=$(jq -n --arg m "$MODEL" --arg p "$prompt" \
-  '{model:$m, messages:[{role:"user",content:$p}], max_tokens:600}' \
+  '{model:$m, messages:[{role:"user",content:$p}], max_tokens:1500}' \
   | curl -sf -m 150 "$INFERENCE_URL" \
       -H "Authorization: Bearer $NEBIUS_API_KEY" -H "Content-Type: application/json" \
       -d @- 2>/dev/null | jq -r '.choices[0].message.content // "analysis unavailable"')
 
-rootcause=$(printf '%s' "$analysis" | sed -n 's/^ROOT CAUSE: *//p' | head -1)
-action=$(printf '%s' "$analysis" | sed -n 's/^ACTION: *//p' | head -1)
-confidence=$(printf '%s' "$analysis" | sed -n 's/^CONFIDENCE: *//p' | head -1)
+# Last match, not first: Nemotron reasons in the open and often echoes the
+# reply template ("ROOT CAUSE: <2 sentences>") before its real answer.
+rootcause=$(printf '%s' "$analysis" | sed -n 's/^ROOT CAUSE: *//p' | tail -1)
+action=$(printf '%s' "$analysis" | sed -n 's/^ACTION: *//p' | tail -1)
+confidence=$(printf '%s' "$analysis" | sed -n 's/^CONFIDENCE: *//p' | tail -1)
+ruled_out=$(printf '%s' "$analysis" | sed -n 's/^RULED OUT: *//p' | tail -1)
 [ -z "$rootcause" ] && rootcause="$analysis"
 [ -z "$action" ] && action="See runbook."
 [ -z "$confidence" ] && confidence="n/a"
+[ -z "$ruled_out" ] && ruled_out="n/a"
 
-# Alert start -> brief ready: the head start the page gives a human.
+# Alert start -> brief ready: the head start the page gives a human. The
+# condition start adds the rule's `for:` wait, which the page cannot beat.
+now_s=$(date +%s)
+hms() { if [ "$1" -gt 0 ]; then date -u -d "@$1" +%H:%M:%SZ; else echo n/a; fi; }
 ttb="n/a"
-[ "${start_s:-0}" -gt 0 ] && ttb="$(( $(date +%s) - start_s ))s"
+[ "$start_s" -gt 0 ] && ttb="$(( now_s - start_s ))s"
+ttb="$ttb after the alert fired"
+[ "$pending_s" -gt 0 ] && ttb="$ttb, $(( now_s - pending_s ))s after the condition began"
 
 # --- incident report ---
 # Build with printf '%s' per field — never expand untrusted values (Tavily web
@@ -255,10 +271,15 @@ ttb="n/a"
   printf -- '- **Severity**: %s\n' "$severity"
   printf -- '- **Status**: firing\n'
   printf -- '- **Summary**: %s\n' "$summary"
-  printf -- '- **Time to brief**: %s after the alert fired\n' "$ttb"
+  printf -- '- **Time to brief**: %s\n' "$ttb"
   printf -- '- **Previous**: %s\n' "$prev_seen"
   printf -- '- **Confidence**: %s\n\n' "$confidence"
   printf '## Root cause\n%s\n\n' "$rootcause"
+  printf '## Ruled out\n%s\n\n' "$ruled_out"
+  printf '## Timeline\n'
+  printf -- '- condition true: %s\n' "$(hms "$pending_s")"
+  printf -- '- alert fired: %s\n' "$(hms "$start_s")"
+  printf -- '- briefed: %s\n\n' "$(hms "$now_s")"
   printf '## Evidence\n'
   printf -- '- up: %s\n' "$up"
   printf -- '- error_ratio_5m: %s\n' "$err_ratio"
@@ -273,7 +294,7 @@ ttb="n/a"
 } > "$report"
 
 # --- Telegram brief on stdout (cron announce delivers it) ---
-printf 'ALERT: %s (%s)\nService: %s\nLikely cause: %s\nConfidence: %s\nPrevious: %s\nEvidence: err_ratio=%s heap=%s latency_mode=%s\nSuggested: %s\nBriefed %s after the alert fired\n' \
+printf 'ALERT: %s (%s)\nService: %s\nLikely cause: %s\nConfidence: %s\nPrevious: %s\nEvidence: err_ratio=%s heap=%s latency_mode=%s\nSuggested: %s\nBriefed %s\n' \
   "$alertname" "$severity" "$service" "$(printf '%s' "$rootcause" | clip 200)" \
   "$(printf '%s' "$confidence" | clip 120)" "$prev_seen" \
   "$err_ratio" "$heap" "$lat_mode" "$(printf '%s' "$action" | clip 120)" "$ttb"
