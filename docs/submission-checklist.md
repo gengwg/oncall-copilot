@@ -176,13 +176,15 @@ https://gengwg.github.io/oncall-copilot/
 ## 7. Demonstration video URL (required, <= 3 min, public YouTube)
 
 ```
-https://www.youtube.com/watch?v=7L6E7PknOUk
+https://www.youtube.com/watch?v=HF232lMSUgE
 ```
 
-> Verified public 2026-09-13 (oEmbed returns 200). Current YouTube title is
-> "demo2" — worth renaming to the project name before judges see it.
+> Re-recorded 2026-10-17 for the v1.2 brief; replaces `7L6E7PknOUk`. oEmbed
+> returns 200 with the title "OnCall Copilot — investigates before it pages
+> you". oEmbed also answers for unlisted videos, so confirm the visibility is
+> Public in YouTube Studio.
 >
-> Video: `docs/media/demo.mp4`, 84s, 1920x1080 h264+AAC, piper TTS narration
+> Video: `docs/media/demo.mp4`, 117s, 1920x1080 h264+AAC, piper TTS narration
 > naming Token Factory + Nemotron + NemoClaw/OpenShell + Tavily. A real
 > screencast of the live pipeline with Telegram Desktop on screen: chaos
 > injected, alert fires, the copilot investigates, the brief lands. Upload as
