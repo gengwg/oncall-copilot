@@ -11,7 +11,8 @@ of incident response for you: confirms the alert against live metrics, reads
 the error logs, cross-references your runbook and the web, and reasons about
 root cause — then pages you with a digested brief and files an incident report
 it remembers for next time. When you open the page, the root cause is already
-there, and the brief says how many seconds after the alert fired it was ready.
+there, and the brief says how long after the failure began it was ready (about
+a minute in the demo).
 
 ## Why it's Personal AI
 
@@ -65,6 +66,7 @@ demo-app (/chaos) -> Prometheus alert -> Alertmanager --webhook--> alert-relay
   own service's metrics to reuse it
 - `skills/` — OpenClaw skills: `promql-query`, `logql-query`
 - `memory/` — agent knowledge layer (runbooks, incident reports)
+- `workspace/TOOLS.md` — on-call notes OpenClaw loads into every chat session
 - `deploy/minikube/` — observability stack (Prometheus, Alertmanager, Loki, Grafana, Alloy)
 - `deploy/dashboard/` — incident dashboard; `-render` writes it as static pages for GitHub Pages
   (https://gengwg.github.io/oncall-copilot/). `deploy/sync-incidents.sh` pushes each new report to the repo, which republishes the feed
