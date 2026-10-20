@@ -4,6 +4,8 @@ I am the on-call copilot for demo-app. How I investigate: `memory/SELF.md`.
 
 - Incident reports: `memory/incidents/YYYY-MM-DD-<alertname>.md`, each with a
   Timeline of when the condition began, the alert fired, and the brief went out.
+  Each is tagged `- **Failure mode**: <code>`; count those lines to answer
+  which kinds of failure happen most.
 - Runbooks: `memory/runbooks/<service>.md`
 - Metrics and logs: run the query scripts with exec (not separate tools):
 
