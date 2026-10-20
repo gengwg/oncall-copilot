@@ -70,14 +70,15 @@ class H(BaseHTTPRequestHandler):
         # its real answer; the parser must take the answer, not the template.
         body = json.dumps({"choices": [{"message": {"content":
             "Need to output in format:\nROOT CAUSE: <2 sentences>\nCONFIDENCE: <high|medium|low>\n"
-            "RULED OUT: <cause - evidence against it>\nACTION: <1 sentence>\n\n"
+            "RULED OUT: <cause - evidence against it>\nACTION: <1 sentence>\nFAILURE MODE: <one word>\n\n"
             "ROOT CAUSE: Injected upstream dial timeouts are failing roughly half of all requests reaching the service, "
             "while the process itself remains entirely healthy, which rules out local resource exhaustion and points "
             "squarely at an unreachable downstream dependency somewhere beyond the pod boundary.\n"
             "CONFIDENCE: high - upstream dial timeout in every error log line\n"
             "RULED OUT: memory exhaustion - heap is flat at 100MB\n"
             "ACTION: Run /chaos/stop on demo-app, then verify the Kubernetes service endpoints and NetworkPolicy rules "
-            "for every downstream dependency it calls."}}]}).encode()
+            "for every downstream dependency it calls.\n"
+            "FAILURE MODE: Dependency - upstream dial timeouts"}}]}).encode()
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(body)))
@@ -136,6 +137,7 @@ check "firing alert -> brief names the alert" "ALERT: DemoHighErrorRate" "$OUT"
 check "firing alert -> brief carries the cause" "Likely cause: Injected upstream dial timeouts" "$OUT"
 check "firing alert -> brief carries the confidence" "Confidence: high - upstream dial timeout" "$OUT"
 check "first occurrence -> no previous incident" "Previous: none on file" "$OUT"
+check "firing alert -> failure mode normalized" "Failure mode: dependency (related: none)" "$OUT"
 if [ -f "$TMP/ws/memory/incidents/$(date -u +%Y-%m-%d)-DemoHighErrorRate.md" ]; then
   ok "firing alert -> incident report written"
 else
@@ -152,6 +154,11 @@ check "repeat alert -> brief names the previous date" "Previous: 2026-10-10" "$O
 check "repeat alert -> prompt carries the previous cause" \
   "PREVIOUS INCIDENT FOR THIS ALERT (2026-10-10):"$'\n'"Injected latency chaos, cleared at 23:29Z." \
   "$(cat "$TMP/last_prompt")"
+# The old report has no failure mode; test 2's report shares this one's.
+check "same failure mode, other alert -> related" \
+  "Failure mode: dependency (related: $(date -u +%Y-%m-%d)-DemoHighErrorRate)" "$OUT"
+check "report carries the failure mode" "- **Failure mode**: dependency" \
+  "$(cat "$TMP/ws/memory/incidents/$(date -u +%Y-%m-%d)-DemoHighLatency.md")"
 
 # 3. Token drift must be loud. Before the fix this was indistinguishable from
 #    an empty queue and alerts silently piled up in the relay forever.

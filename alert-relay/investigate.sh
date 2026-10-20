@@ -229,11 +229,12 @@ $prev_cause
 RUNBOOK EXCERPT:
 $(printf '%s' "$runbook" | head -20)
 
-Reply format (plain text, four lines):
+Reply format (plain text, five lines):
 ROOT CAUSE: <2 sentences>
 CONFIDENCE: <high|medium|low> - <the one evidence item it rests on>
 RULED OUT: <cause - evidence against it>; <cause - evidence against it>
-ACTION: <1 sentence>"
+ACTION: <1 sentence>
+FAILURE MODE: <one word: change (deploy/config) | capacity (OOM, disk, CPU, quota) | dependency (upstream service or provider) | network (DNS, partition, LB) | hardware (GPU Xid/ECC, disk, NIC, node) | fabric (InfiniBand, NCCL) | control-plane (scheduling, operators) | other>"
 
 analysis=$(jq -n --arg m "$MODEL" --arg p "$prompt" \
   '{model:$m, messages:[{role:"user",content:$p}], max_tokens:1500}' \
@@ -251,6 +252,19 @@ ruled_out=$(printf '%s' "$analysis" | sed -n 's/^RULED OUT: *//p' | tail -1)
 [ -z "$action" ] && action="See runbook."
 [ -z "$confidence" ] && confidence="n/a"
 [ -z "$ruled_out" ] && ruled_out="n/a"
+fm=$(printf '%s' "$analysis" | sed -n 's/^FAILURE MODE: *//p' | tail -1 | awk '{print tolower($1)}')
+case "$fm" in change|capacity|dependency|network|hardware|fabric|control-plane) ;; *) fm=other ;; esac
+
+# Latest report for a different alert with the same failure mode: the same
+# kind of failure can surface under another alert name.
+related="none"
+if [ "$fm" != "other" ]; then
+  related=$(grep -lxF -- "- **Failure mode**: $fm" "$INCIDENTS"/*.md 2>/dev/null | while read -r f; do
+    b=$(basename "$f" .md)
+    case "$b" in ????-??-??-"$alert_slug") ;; *) echo "$b" ;; esac
+  done | tail -1)
+  [ -z "$related" ] && related="none"
+fi
 
 # Alert start -> brief ready: the head start the page gives a human. The
 # condition start adds the rule's `for:` wait, which the page cannot beat.
@@ -273,7 +287,9 @@ ttb="$ttb after the alert fired"
   printf -- '- **Summary**: %s\n' "$summary"
   printf -- '- **Time to brief**: %s\n' "$ttb"
   printf -- '- **Previous**: %s\n' "$prev_seen"
-  printf -- '- **Confidence**: %s\n\n' "$confidence"
+  printf -- '- **Confidence**: %s\n' "$confidence"
+  printf -- '- **Failure mode**: %s\n' "$fm"
+  printf -- '- **Related**: %s\n\n' "$related"
   printf '## Root cause\n%s\n\n' "$rootcause"
   printf '## Ruled out\n%s\n\n' "$ruled_out"
   printf '## Timeline\n'
@@ -294,9 +310,9 @@ ttb="$ttb after the alert fired"
 } > "$report"
 
 # --- Telegram brief on stdout (cron announce delivers it) ---
-printf 'ALERT: %s (%s)\nService: %s\nLikely cause: %s\nConfidence: %s\nPrevious: %s\nEvidence: err_ratio=%s heap=%s latency_mode=%s\nSuggested: %s\nBriefed %s\n' \
+printf 'ALERT: %s (%s)\nService: %s\nLikely cause: %s\nConfidence: %s\nPrevious: %s\nFailure mode: %s (related: %s)\nEvidence: err_ratio=%s heap=%s latency_mode=%s\nSuggested: %s\nBriefed %s\n' \
   "$alertname" "$severity" "$service" "$(printf '%s' "$rootcause" | clip 200)" \
-  "$(printf '%s' "$confidence" | clip 120)" "$prev_seen" \
+  "$(printf '%s' "$confidence" | clip 120)" "$prev_seen" "$fm" "$related" \
   "$err_ratio" "$heap" "$lat_mode" "$(printf '%s' "$action" | clip 120)" "$ttb"
 }
 
