@@ -52,10 +52,34 @@ esac
 EOF
 cat > "$TMP/ws/skills/logql-query/scripts/query.sh" <<'EOF'
 #!/usr/bin/env bash
+[ "${STUB_LOKI_EMPTY:-0}" = "1" ] && exit 0
 printf '%s\t%s\n' "2026-09-12T00:00:00Z" '{"msg":"request failed","err":"upstream dial timeout"}'
 EOF
 chmod +x "$TMP/ws/skills"/*/scripts/query.sh
 echo "# demo-app runbook" > "$TMP/ws/memory/runbooks/demo-app.md"
+
+# --- stub kubectl: logs its args, answers like a read-only node lookup ---
+mkdir -p "$TMP/bin" "$TMP/kc"
+: > "$TMP/kc/c1.kubeconfig"
+cat > "$TMP/bin/kubectl" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >> "$TMP/kubectl.args"
+EOF
+cat >> "$TMP/bin/kubectl" <<'EOF'
+case "$*" in
+  *" get node "*) cat <<'JSON'
+{"spec":{"unschedulable":true,"taints":[{"key":"node.kubernetes.io/unschedulable","effect":"NoSchedule"}]},
+ "status":{"conditions":[
+  {"type":"Ready","status":"True","reason":"KubeletReady"},
+  {"type":"MemoryPressure","status":"False","reason":"KubeletHasSufficientMemory"},
+  {"type":"XidCritical","status":"True","reason":"Xid79","message":"NVRM: Xid (PCI:0000:1b:00): 79, GPU has fallen off the bus."}]}}
+JSON
+  ;;
+  *" get events "*) echo '{"items":[{"lastTimestamp":"2026-10-25T03:01:00Z","reason":"NodeNotSchedulable","message":"Node gpu-node-7 status is now: NodeNotSchedulable"}]}' ;;
+  *" get pods "*) echo '{"items":[{"status":{"phase":"Running"}},{"status":{"phase":"Running"}},{"status":{"phase":"Failed"}}]}' ;;
+esac
+EOF
+chmod +x "$TMP/bin/kubectl"
 
 # --- stub inference endpoint (stands in for inference.local) ---
 cat > "$TMP/infer.py" <<'EOF'
@@ -105,6 +129,15 @@ post_alert() { # post_alert <alertname> [status] [service] [startsAt]
       --arg at "${4:-2026-09-12T00:00:00Z}" \
       '{status:$s, alerts:[{status:$s, labels:{alertname:$n, severity:"critical", service:$svc},
         annotations:{summary:("summary for " + $n)}, startsAt:$at}]}')" >/dev/null
+}
+
+post_node_alert() { # post_node_alert <alertname> <cluster> <node>: a real-cluster alert, no service label
+  curl -sf -m 2 -X POST "http://127.0.0.1:$RELAY_PORT/alert" \
+    -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+    -d "$(jq -n --arg n "$1" --arg c "$2" --arg node "$3" \
+      '{status:"firing", alerts:[{status:"firing", labels:{alertname:$n, severity:"critical", cluster:$c, node:$node},
+        annotations:{summary:("summary for " + $n), description:"A GPU reported Xid 79 and is off the bus; the node needs a reboot."},
+        startsAt:"2026-09-12T00:00:00Z"}]}')" >/dev/null
 }
 
 run_investigate() { # run_investigate [env assignments...] ; sets OUT/ERR/RC
@@ -310,6 +343,45 @@ fi
 report=$(cat "$TMP/ws/memory/incidents/$(date -u +%Y-%m-%d)-DemoHighLatency.md")
 check "report lists ruled-out causes" $'## Ruled out\nmemory exhaustion - heap is flat at 100MB' "$report"
 check "report timeline has the condition start" "- condition true: $(date -u -d "@$pending_at" +%H:%M:%SZ)" "$report"
+
+# 16. A real-cluster alert carries cluster/node labels and no service. Its
+#     evidence is the node itself, read with that cluster's read-only
+#     kubeconfig; the demo's metrics and logs come back empty.
+curl -sf -m 2 -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$RELAY_PORT/alerts" >/dev/null
+: > "$TMP/kubectl.args"
+post_node_alert GPUXidCritical c1 gpu-node-7
+run_investigate PATH="$TMP/bin:$PATH" KUBECONFIG_DIR="$TMP/kc" STUB_PROM_EMPTY=1 STUB_LOKI_EMPTY=1
+prompt=$(cat "$TMP/last_prompt")
+check "node alert -> brief names cluster/node, not demo-app" "Service: c1/gpu-node-7" "$OUT"
+check "node alert -> prompt has the abnormal condition" "condition XidCritical=True: NVRM: Xid (PCI:0000:1b:00): 79" "$prompt"
+check "node alert -> prompt has the cordon state" "cordoned: true" "$prompt"
+check "node alert -> prompt has pod phases" "pods on node: Failed=1 Running=2" "$prompt"
+check "node alert -> prompt has node events" "NodeNotSchedulable: Node gpu-node-7" "$prompt"
+check "node alert -> prompt has the rule description" "A GPU reported Xid 79 and is off the bus" "$prompt"
+case "$prompt" in
+  *MemoryPressure*) bad "node alert -> healthy conditions left out" "MemoryPressure=False reached the prompt" ;;
+  *) ok "node alert -> healthy conditions left out" ;;
+esac
+check "node alert -> uses the cluster's read-only kubeconfig" "--kubeconfig $TMP/kc/c1.kubeconfig" "$(cat "$TMP/kubectl.args")"
+case "$ERR" in
+  *"no evidence collected"*) bad "node evidence counts as evidence" "warned although node evidence was collected" ;;
+  *) ok "node evidence counts as evidence" ;;
+esac
+report=$(cat "$TMP/ws/memory/incidents/$(date -u +%Y-%m-%d)-GPUXidCritical.md")
+check "node alert -> report has node evidence" "cordoned: true" "$report"
+
+# 17. A cluster with no read-only kubeconfig is said so, and kubectl is never
+#     run (it would fall back to whatever admin context the host has).
+curl -sf -m 2 -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$RELAY_PORT/alerts" >/dev/null
+: > "$TMP/kubectl.args"
+post_node_alert GPUXidCritical c2 gpu-node-9
+run_investigate PATH="$TMP/bin:$PATH" KUBECONFIG_DIR="$TMP/kc"
+check "no kubeconfig -> prompt says node evidence not collected" "not collected (no read-only kubeconfig for cluster c2)" "$(cat "$TMP/last_prompt")"
+if [ -s "$TMP/kubectl.args" ]; then
+  bad "no kubeconfig -> kubectl not run" "kubectl ran: $(cat "$TMP/kubectl.args")"
+else
+  ok "no kubeconfig -> kubectl not run"
+fi
 
 echo
 echo "passed: $PASS  failed: $FAIL"

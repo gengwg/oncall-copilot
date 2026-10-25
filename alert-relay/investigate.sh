@@ -35,6 +35,9 @@ PROM="$WORKSPACE/skills/promql-query/scripts/query.sh"
 LOGQ="$WORKSPACE/skills/logql-query/scripts/query.sh"
 INCIDENTS="$WORKSPACE/memory/incidents"
 RUNBOOKS="$WORKSPACE/memory/runbooks"
+# Read-only kubeconfigs named <cluster>.kubeconfig. Node evidence is collected
+# only through these, never through whatever context the host defaults to.
+KUBECONFIG_DIR="${KUBECONFIG_DIR:-}"
 MODEL="${MODEL:-nvidia/Nemotron-3-Ultra-550b-a55b}"
 INFERENCE_URL="${INFERENCE_URL:-https://inference.local/v1/chat/completions}"
 
@@ -99,11 +102,19 @@ fi
 investigate_one() {
 alert_json="$1"
 alertname=$(printf '%s' "$alert_json" | jq -r '.alertname // "Unknown"')
-service=$(printf '%s' "$alert_json" | jq -r '.service // "demo-app"')
+service=$(printf '%s' "$alert_json" | jq -r '.service // ""')
 # Sanitize like alertname: service lands in the runbook path and in queries.
 service=$(printf '%s' "$service" | tr -c 'A-Za-z0-9_-' '_')
+# Real-cluster alerts name a cluster and node instead of a service. Both land in
+# a kubeconfig path and a field selector.
+cluster=$(printf '%s' "$alert_json" | jq -r '.labels.cluster // ""')
+cluster=$(printf '%s' "$cluster" | tr -c 'A-Za-z0-9_.-' '_')
+node=$(printf '%s' "$alert_json" | jq -r '.labels.node // ""')
+node=$(printf '%s' "$node" | tr -c 'A-Za-z0-9_.-' '_')
+subject="${service:-${cluster:-unknown}${node:+/$node}}"
 severity=$(printf '%s' "$alert_json" | jq -r '.severity // "warning"')
 summary=$(printf '%s' "$alert_json" | jq -r '.summary // ""')
+description=$(printf '%s' "$alert_json" | jq -r '.description // ""' | clip 600)
 status=$(printf '%s' "$alert_json" | jq -r '.status // "firing"')
 date=$(date -u +%Y-%m-%d)
 # Sanitize: alertname is an untrusted label and lands in a path. A '/' or '..'
@@ -183,12 +194,42 @@ heap=$(norm "$heap")
 lat_mode=$(norm "$lat_mode")
 err_logs="${logs:-}"
 
+# Node evidence for real-cluster alerts. node-problem-detector puts the dmesg
+# line in a node condition's message, so conditions away from their normal
+# state are the "logs" for hardware faults; these clusters ship no logs to Loki.
+node_info=""
+node_note=""
+if [ -n "$node" ]; then
+  kc="$KUBECONFIG_DIR/$cluster.kubeconfig"
+  if [ -z "$KUBECONFIG_DIR" ] || [ -z "$cluster" ] || [ ! -r "$kc" ]; then
+    node_note="not collected (no read-only kubeconfig for cluster ${cluster:-unknown})"
+  else
+    k=(kubectl --kubeconfig "$kc" --request-timeout=10s)
+    node_info=$("${k[@]}" get node "$node" -o json 2>/dev/null | jq -r '
+      "ready: " + ([.status.conditions[]? | select(.type=="Ready") | .status + " (" + (.reason // "") + ")"] | first // "unknown"),
+      "cordoned: " + ((.spec.unschedulable // false) | tostring),
+      "taints: " + ([.spec.taints[]? | .key + ":" + .effect] | join(", ") | if . == "" then "none" else . end),
+      (.status.conditions[]? | select(.type != "Ready" and .status != "False")
+        | "condition " + .type + "=" + .status + ": " + ((.message // .reason // "") | .[0:240]))' 2>/dev/null)
+    if [ -n "$node_info" ]; then
+      pods=$("${k[@]}" get pods -A --field-selector "spec.nodeName=$node" -o json 2>/dev/null \
+        | jq -r '"pods on node: " + ([.items[].status.phase] | group_by(.) | map(.[0] + "=" + (length | tostring)) | join(" "))' 2>/dev/null)
+      events=$("${k[@]}" get events -A --field-selector "involvedObject.kind=Node,involvedObject.name=$node" -o json 2>/dev/null \
+        | jq -r '.items | sort_by(.lastTimestamp // .eventTime // "") | .[-5:][]
+          | "event " + (.lastTimestamp // .eventTime // "?") + " " + .reason + ": " + ((.message // "") | .[0:160])' 2>/dev/null)
+      node_info=$(printf '%s\n%s\n%s' "$node_info" "$pods" "$events" | sed '/^$/d')
+    else
+      node_note="not collected (kubectl could not read node $node in $cluster)"
+    fi
+  fi
+fi
+
 # Every field n/a and no logs means the collectors are broken -- unreadable
 # skill scripts, an unreachable Prometheus -- not a mysterious incident. The
 # n/a fallback above is what makes that look like a normal quiet page, so say
 # so loudly instead of shipping a brief reasoned over nothing.
 if [ "$up" = "n/a" ] && [ "$err_ratio" = "n/a" ] && [ "$heap" = "n/a" ] \
-   && [ "$lat_mode" = "n/a" ] && [ -z "$err_logs" ]; then
+   && [ "$lat_mode" = "n/a" ] && [ -z "$err_logs" ] && [ -z "$node_info" ]; then
   echo "error: no evidence collected for $alertname — every query returned nothing." >&2
   echo "  checked: $PROM, $LOGQ against $PROMETHEUS_URL and $LOKI_URL" >&2
   [ -x "$PROM" ] || echo "  $PROM is not executable" >&2
@@ -206,17 +247,23 @@ if [ -n "${TAVILY_API_KEY:-}" ] && [ -n "$err_string" ] && [ "$err_string" != "n
   [ -z "$web_context" ] && web_context="no results"
 fi
 
+node_section=""
+[ -n "$node" ] && node_section="
+- node $subject:
+${node_info:-$node_note}"
+
 # --- Nemotron analysis ---
 prompt="You are an SRE analyzing a live alert. Given the alert, live evidence, and web context, write a 2-sentence root-cause assessment, up to 2 other plausible causes the evidence rules out, and 1 suggested first action. Be specific; use the numbers. If the previous incident had the same cause, say so.
 
-ALERT: $alertname ($severity) on $service — $summary
+ALERT: $alertname ($severity) on $subject — $summary${description:+
+RULE DESCRIPTION: $description}
 
 LIVE EVIDENCE:
 - up: $up
 - error_ratio_5m: $err_ratio
 - heap_alloc_bytes: $heap
 - heap_trend: ${heap_trend:-n/a}
-- latency_mode: $lat_mode
+- latency_mode: $lat_mode$node_section
 - recent logs (${lookback}m window from alert start):
 $err_logs
 
@@ -281,7 +328,7 @@ ttb="$ttb after the alert fired"
 # which would re-parse and execute $(...) / backticks.
 {
   printf '# %s — %s\n\n' "$alertname" "$date"
-  printf -- '- **Service**: %s\n' "$service"
+  printf -- '- **Service**: %s\n' "$subject"
   printf -- '- **Severity**: %s\n' "$severity"
   printf -- '- **Status**: firing\n'
   printf -- '- **Summary**: %s\n' "$summary"
@@ -302,6 +349,7 @@ ttb="$ttb after the alert fired"
   printf -- '- heap_alloc_bytes: %s\n' "$heap"
   printf -- '- heap_trend: %s\n' "${heap_trend:-n/a}"
   printf -- '- latency_mode: %s\n' "$lat_mode"
+  [ -n "$node" ] && printf -- '- node %s:\n```\n%s\n```\n' "$subject" "${node_info:-$node_note}"
   printf -- '- recent logs (%sm window from alert start):\n```\n%s\n```\n\n' "$lookback" "$err_logs"
   [ -n "${evidence_broken:-}" ] && printf '> **Evidence collection failed** — every query returned nothing, so the\n> analysis below has no live data behind it.\n\n'
   printf '## Web context\n%s\n\n' "$web_context"
@@ -311,7 +359,7 @@ ttb="$ttb after the alert fired"
 
 # --- Telegram brief on stdout (cron announce delivers it) ---
 printf 'ALERT: %s (%s)\nService: %s\nLikely cause: %s\nConfidence: %s\nPrevious: %s\nFailure mode: %s (related: %s)\nEvidence: err_ratio=%s heap=%s latency_mode=%s\nSuggested: %s\nBriefed %s\n' \
-  "$alertname" "$severity" "$service" "$(printf '%s' "$rootcause" | clip 200)" \
+  "$alertname" "$severity" "$subject" "$(printf '%s' "$rootcause" | clip 200)" \
   "$(printf '%s' "$confidence" | clip 120)" "$prev_seen" "$fm" "$related" \
   "$err_ratio" "$heap" "$lat_mode" "$(printf '%s' "$action" | clip 120)" "$ttb"
 }
