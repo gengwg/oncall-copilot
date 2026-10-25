@@ -15,6 +15,9 @@ metadata:
       - name: PROMETHEUS_URL
         required: true
         description: Base URL of the Prometheus server, e.g. http://prometheus.observability.svc:9090
+      - name: PROMETHEUS_TOKEN
+        required: false
+        description: Bearer token, e.g. a Grafana Viewer service-account token when PROMETHEUS_URL is a Grafana datasource proxy
 ---
 
 # promql-query

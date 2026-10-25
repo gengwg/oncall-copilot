@@ -7,12 +7,16 @@ set -euo pipefail
 
 : "${PROMETHEUS_URL:?set PROMETHEUS_URL, e.g. http://localhost:9090}"
 BASE="${PROMETHEUS_URL%/}"
+# Optional bearer token, e.g. a Grafana Viewer service-account token when
+# PROMETHEUS_URL is a Grafana datasource proxy.
+auth=()
+[ -n "${PROMETHEUS_TOKEN:-}" ] && auth=(-H "Authorization: Bearer $PROMETHEUS_TOKEN")
 
 cmd="${1:?instant|range|labels}"
 case "$cmd" in
   instant)
     q="${2:?promql required}"
-    curl -sfG "$BASE/api/v1/query" --data-urlencode "query=$q" \
+    curl -sfG "${auth[@]}" "$BASE/api/v1/query" --data-urlencode "query=$q" \
       | jq -c '.data.result[] | {metric: .metric, value: .value[1]}'
     ;;
   range)
@@ -21,7 +25,7 @@ case "$cmd" in
     step="${4:-15}"
     end=$(date +%s)
     start=$((end - minutes * 60))
-    curl -sfG "$BASE/api/v1/query_range" \
+    curl -sfG "${auth[@]}" "$BASE/api/v1/query_range" \
       --data-urlencode "query=$q" \
       --data-urlencode "start=$start" \
       --data-urlencode "end=$end" \
@@ -31,9 +35,9 @@ case "$cmd" in
   labels)
     label="${3:-}"
     if [ -n "$label" ]; then
-      curl -sfG "$BASE/api/v1/label/$label/values" | jq -c '.data'
+      curl -sfG "${auth[@]}" "$BASE/api/v1/label/$label/values" | jq -c '.data'
     else
-      curl -sfG "$BASE/api/v1/labels" | jq -c '.data'
+      curl -sfG "${auth[@]}" "$BASE/api/v1/labels" | jq -c '.data'
     fi
     ;;
   *)
