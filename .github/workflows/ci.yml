@@ -26,3 +26,4 @@ jobs:
         with:
           go-version-file: alert-relay/go.mod
       - run: ./tests/investigate_test.sh
+      - run: ./tests/query_scripts_test.sh

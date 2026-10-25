@@ -15,6 +15,9 @@ metadata:
       - name: LOKI_URL
         required: true
         description: Base URL of the Loki server, e.g. http://loki.observability.svc:3100
+      - name: LOKI_TOKEN
+        required: false
+        description: Bearer token, e.g. a Grafana Viewer service-account token when LOKI_URL is a Grafana datasource proxy
 ---
 
 # logql-query

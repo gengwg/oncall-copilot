@@ -6,6 +6,10 @@ set -euo pipefail
 
 : "${LOKI_URL:?set LOKI_URL, e.g. http://localhost:3100}"
 BASE="${LOKI_URL%/}"
+# Optional bearer token, e.g. a Grafana Viewer service-account token when
+# LOKI_URL is a Grafana datasource proxy.
+auth=()
+[ -n "${LOKI_TOKEN:-}" ] && auth=(-H "Authorization: Bearer $LOKI_TOKEN")
 
 cmd="${1:?tail|count}"
 now_ns=$(($(date +%s) * 1000000000))
@@ -16,7 +20,7 @@ case "$cmd" in
     minutes="${3:-30}"
     limit="${4:-50}"
     start_ns=$((now_ns - minutes * 60 * 1000000000))
-    curl -sfG "$BASE/loki/api/v1/query_range" \
+    curl -sfG "${auth[@]}" "$BASE/loki/api/v1/query_range" \
       --data-urlencode "query=$q" \
       --data-urlencode "start=$start_ns" \
       --data-urlencode "end=$now_ns" \
@@ -29,7 +33,7 @@ case "$cmd" in
     q="${2:?metric logql required}"
     minutes="${3:-30}"
     start_ns=$((now_ns - minutes * 60 * 1000000000))
-    curl -sfG "$BASE/loki/api/v1/query_range" \
+    curl -sfG "${auth[@]}" "$BASE/loki/api/v1/query_range" \
       --data-urlencode "query=$q" \
       --data-urlencode "start=$start_ns" \
       --data-urlencode "end=$now_ns" \
