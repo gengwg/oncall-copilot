@@ -117,7 +117,7 @@ https://github.com/gengwg/oncall-copilot
 ```
 
 > Public as of 2026-09-27, verified anonymously (repo and release pages return
-> 200). Latest release is `v1.2.1`.
+> 200). Latest release is `v1.3.0`.
 > Apache-2.0 LICENSE is at the repo root. README has setup + how Nebius/
 > Nemotron/Tavily were used.
 
