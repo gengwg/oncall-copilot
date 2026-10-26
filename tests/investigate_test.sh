@@ -185,6 +185,10 @@ check "first occurrence -> no previous incident" "Previous: none on file" "$OUT"
 check "firing alert -> failure mode normalized" "Failure mode: dependency (related: none)" "$OUT"
 check "firing alert -> verdict normalized, with its reason" "Verdict: hold - chaos was injected in the demo" "$OUT"
 check "firing alert -> prompt asks for a page-or-hold verdict" "VERDICT: <page|hold>" "$(cat "$TMP/last_prompt")"
+case "$OUT" in
+  *"Degraded:"*) bad "healthy brief -> no Degraded line" "got: $OUT" ;;
+  *) ok "healthy brief -> no Degraded line" ;;
+esac
 if [ -f "$TMP/ws/memory/incidents/$(date -u +%Y-%m-%d)-DemoHighErrorRate.md" ]; then
   ok "firing alert -> incident report written"
 else
@@ -454,6 +458,14 @@ curl -sf -m 2 -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$RELAY_PORT/al
 post_node_alert GPUXidCritical c2 gpu-node-9
 run_investigate PATH="$TMP/bin:$PATH" KUBECONFIG_DIR="$TMP/kc" STUB_PROM_EMPTY=1 STUB_LOKI_EMPTY=1
 check "no evidence + no kubeconfig -> warning names the cause" "node evidence not collected (no read-only kubeconfig for cluster c2)" "$ERR"
+check "no kubeconfig -> brief marked degraded" "Degraded: node evidence not collected (no read-only kubeconfig for cluster c2)" "$OUT"
+
+# A brief written without the model is degraded too: the poller stops the
+# heartbeat on it, so a dead model key alerts like a dead poller.
+curl -sf -m 2 -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$RELAY_PORT/alerts" >/dev/null
+post_alert DemoHighErrorRate
+run_investigate INFERENCE_URL="http://127.0.0.1:9/v1/chat/completions"
+check "model unreachable -> brief marked degraded" "Degraded: model call failed" "$OUT"
 
 echo
 echo "passed: $PASS  failed: $FAIL"
