@@ -67,7 +67,10 @@ echo "\$*" >> "$TMP/kubectl.args"
 EOF
 cat >> "$TMP/bin/kubectl" <<'EOF'
 case "$*" in
-  *" get node "*) cat <<'JSON'
+  *" get node "*) [ "${STUB_NODE_HEALTHY:-0}" = "1" ] && {
+      echo '{"spec":{},"status":{"conditions":[{"type":"Ready","status":"True","reason":"KubeletReady"},{"type":"MemoryPressure","status":"False"},{"type":"XidCritical","status":"False","lastTransitionTime":"2026-10-25T03:20:00Z"}]}}'
+      exit 0; }
+    cat <<'JSON'
 {"spec":{"unschedulable":true,"taints":[{"key":"node.kubernetes.io/unschedulable","effect":"NoSchedule"}]},
  "status":{"conditions":[
   {"type":"Ready","status":"True","reason":"KubeletReady"},
@@ -131,13 +134,14 @@ post_alert() { # post_alert <alertname> [status] [service] [startsAt]
         annotations:{summary:("summary for " + $n)}, startsAt:$at}]}')" >/dev/null
 }
 
-post_node_alert() { # post_node_alert <alertname> <cluster> <node>: a real-cluster alert, no service label
+post_node_alert() { # post_node_alert <alertname> <cluster> <node> [condition] [startsAt]: a real-cluster alert, no service label
   curl -sf -m 2 -X POST "http://127.0.0.1:$RELAY_PORT/alert" \
     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-    -d "$(jq -n --arg n "$1" --arg c "$2" --arg node "$3" \
-      '{status:"firing", alerts:[{status:"firing", labels:{alertname:$n, severity:"critical", cluster:$c, node:$node},
+    -d "$(jq -n --arg n "$1" --arg c "$2" --arg node "$3" --arg cond "${4:-}" --arg at "${5:-2026-09-12T00:00:00Z}" \
+      '{status:"firing", alerts:[{status:"firing", labels:({alertname:$n, severity:"critical", cluster:$c, node:$node}
+          + (if $cond == "" then {} else {condition:$cond} end)),
         annotations:{summary:("summary for " + $n), description:"A GPU reported Xid 79 and is off the bus; the node needs a reboot."},
-        startsAt:"2026-09-12T00:00:00Z"}]}')" >/dev/null
+        startsAt:$at}]}')" >/dev/null
 }
 
 run_investigate() { # run_investigate [env assignments...] ; sets OUT/ERR/RC
@@ -358,6 +362,11 @@ check "node alert -> prompt has the cordon state" "cordoned: true" "$prompt"
 check "node alert -> prompt has pod phases" "pods on node: Failed=1 Running=2" "$prompt"
 check "node alert -> prompt has node events" "NodeNotSchedulable: Node gpu-node-7" "$prompt"
 check "node alert -> prompt has the rule description" "A GPU reported Xid 79 and is off the bus" "$prompt"
+check "node alert -> prompt keeps metric faults from reading as recovered" "their absence is not a sign of recovery" "$prompt"
+case "$prompt" in
+  *"is serving"*) bad "node alert -> prompt does not equate Ready with serving" "Ready reads as serving" ;;
+  *) ok "node alert -> prompt does not equate Ready with serving" ;;
+esac
 case "$prompt" in
   *MemoryPressure*) bad "node alert -> healthy conditions left out" "MemoryPressure=False reached the prompt" ;;
   *) ok "node alert -> healthy conditions left out" ;;
@@ -369,6 +378,36 @@ case "$ERR" in
 esac
 report=$(cat "$TMP/ws/memory/incidents/$(date -u +%Y-%m-%d)-GPUXidCritical.md")
 check "node alert -> report has node evidence" "cordoned: true" "$report"
+case "$prompt" in
+  *"abnormal conditions now: none"*) bad "faulted node -> no 'none' line" "claims no abnormal conditions while XidCritical=True" ;;
+  *) ok "faulted node -> no 'none' line" ;;
+esac
+
+# A healthy node says so outright: a missing line is not evidence to a model,
+# an explicit "none" is.
+curl -sf -m 2 -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$RELAY_PORT/alerts" >/dev/null
+post_node_alert GPUXidCritical c1 gpu-node-7
+run_investigate PATH="$TMP/bin:$PATH" KUBECONFIG_DIR="$TMP/kc" STUB_NODE_HEALTHY=1
+check "healthy node -> prompt says no abnormal conditions" "abnormal conditions now: none" "$(cat "$TMP/last_prompt")"
+
+# 18. An alert that names its node condition gets that condition's current
+#     state computed, not left for the model to infer from a missing line.
+curl -sf -m 2 -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$RELAY_PORT/alerts" >/dev/null
+post_node_alert GPUXidCritical c1 gpu-node-7 XidCritical
+run_investigate PATH="$TMP/bin:$PATH" KUBECONFIG_DIR="$TMP/kc"
+check "condition still set -> says still active" "alert condition XidCritical: True now, still active" "$(cat "$TMP/last_prompt")"
+curl -sf -m 2 -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$RELAY_PORT/alerts" >/dev/null
+post_node_alert GPUXidCritical c1 gpu-node-7 XidCritical
+run_investigate PATH="$TMP/bin:$PATH" KUBECONFIG_DIR="$TMP/kc" STUB_NODE_HEALTHY=1
+check "condition cleared after firing -> says cleared after the alert fired" "alert condition XidCritical: False now, cleared after the alert fired (at 2026-10-25T03:20:00Z)" "$(cat "$TMP/last_prompt")"
+curl -sf -m 2 -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$RELAY_PORT/alerts" >/dev/null
+post_node_alert GPUXidCritical c1 gpu-node-7 XidCritical 2026-10-26T00:00:00Z
+run_investigate PATH="$TMP/bin:$PATH" KUBECONFIG_DIR="$TMP/kc" STUB_NODE_HEALTHY=1
+check "condition clear before firing -> says so, not cleared after" "alert condition XidCritical: False since 2026-10-25T03:20:00Z, already clear when the alert fired" "$(cat "$TMP/last_prompt")"
+curl -sf -m 2 -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$RELAY_PORT/alerts" >/dev/null
+post_node_alert GPUXidCritical c1 gpu-node-7 GpuNvlinkLinkDown
+run_investigate PATH="$TMP/bin:$PATH" KUBECONFIG_DIR="$TMP/kc" STUB_NODE_HEALTHY=1
+check "condition unknown to the node -> says not reported" "alert condition GpuNvlinkLinkDown: not reported by this node" "$(cat "$TMP/last_prompt")"
 
 # 17. A cluster with no read-only kubeconfig is said so, and kubectl is never
 #     run (it would fall back to whatever admin context the host has).
