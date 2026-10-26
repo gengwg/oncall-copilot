@@ -89,7 +89,7 @@ chmod +x "$TMP/bin/kubectl"
 
 # --- stub inference endpoint (stands in for inference.local) ---
 cat > "$TMP/infer.py" <<'EOF'
-import json, sys
+import json, os, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 class H(BaseHTTPRequestHandler):
     def do_POST(self):
@@ -98,9 +98,14 @@ class H(BaseHTTPRequestHandler):
             f.write(req['messages'][0]['content'])
         # Nemotron thinks out loud and often echoes the reply template before
         # its real answer; the parser must take the answer, not the template.
+        # A <prompt-file>.noverdict flag drops the real VERDICT line, leaving
+        # only the echoed template one.
+        verdict = "" if os.path.exists(sys.argv[2] + ".noverdict") else \
+            "\nVERDICT: Hold - chaos was injected in the demo; nothing customer-facing"
         body = json.dumps({"choices": [{"message": {"content":
             "Need to output in format:\nROOT CAUSE: <2 sentences>\nCONFIDENCE: <high|medium|low>\n"
-            "RULED OUT: <cause - evidence against it>\nACTION: <1 sentence>\nFAILURE MODE: <one word>\n\n"
+            "RULED OUT: <cause - evidence against it>\nACTION: <1 sentence>\nFAILURE MODE: <one word>\n"
+            "VERDICT: <page|hold> - <why>\n\n"
             "ROOT CAUSE: Injected upstream dial timeouts are failing roughly half of all requests reaching the service, "
             "while the process itself remains entirely healthy, which rules out local resource exhaustion and points "
             "squarely at an unreachable downstream dependency somewhere beyond the pod boundary.\n"
@@ -108,7 +113,7 @@ class H(BaseHTTPRequestHandler):
             "RULED OUT: memory exhaustion - heap is flat at 100MB\n"
             "ACTION: Run /chaos/stop on demo-app, then verify the Kubernetes service endpoints and NetworkPolicy rules "
             "for every downstream dependency it calls.\n"
-            "FAILURE MODE: Dependency - upstream dial timeouts"}}]}).encode()
+            "FAILURE MODE: Dependency - upstream dial timeouts" + verdict}}]}).encode()
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(body)))
@@ -178,11 +183,23 @@ check "firing alert -> brief carries the cause" "Likely cause: Injected upstream
 check "firing alert -> brief carries the confidence" "Confidence: high - upstream dial timeout" "$OUT"
 check "first occurrence -> no previous incident" "Previous: none on file" "$OUT"
 check "firing alert -> failure mode normalized" "Failure mode: dependency (related: none)" "$OUT"
+check "firing alert -> verdict normalized, with its reason" "Verdict: hold - chaos was injected in the demo" "$OUT"
+check "firing alert -> prompt asks for a page-or-hold verdict" "VERDICT: <page|hold>" "$(cat "$TMP/last_prompt")"
 if [ -f "$TMP/ws/memory/incidents/$(date -u +%Y-%m-%d)-DemoHighErrorRate.md" ]; then
   ok "firing alert -> incident report written"
 else
   bad "firing alert -> incident report written" "no report in $TMP/ws/memory/incidents: $(ls "$TMP/ws/memory/incidents" 2>&1)"
 fi
+check "firing alert -> report carries the verdict" "- **Verdict**: hold - chaos was injected in the demo" \
+  "$(cat "$TMP/ws/memory/incidents/$(date -u +%Y-%m-%d)-DemoHighErrorRate.md")"
+
+# 2b. No usable verdict (only the echoed template) defaults to page: a wrong
+#     page costs sleep, a wrong hold costs an outage.
+touch "$TMP/last_prompt.noverdict"
+post_alert DemoHighErrorRate
+run_investigate
+rm -f "$TMP/last_prompt.noverdict"
+check "no verdict -> defaults to page" "Verdict: page - no verdict given, defaulting to page" "$OUT"
 
 # 2b. A repeat alert feeds the last report's root cause to the model.
 mkdir -p "$TMP/ws/memory/incidents"
