@@ -83,6 +83,7 @@ chmod +x "$TMP/investigate.sh"
 group() { # group <id> <number> <state> <alertname> <cluster> <severity> [node]: one IRM alert group
   jq -n --arg id "$1" --argjson n "$2" --arg st "$3" --arg a "$4" --arg c "$5" --arg sev "$6" --arg node "${7:-gpu-node-1}" '{
     id:$id, alert_group_number:$n, state:$st, created_at:"2026-10-25T09:04:00Z",
+    permalinks:{slack:("https://slack.example/archives/C1/p" + ($n|tostring))},
     last_alert:{payload:{commonLabels:{severity:$sev}, alerts:[{status:"firing",
       labels:{alertname:$a, cluster:$c, node:$node, severity:$sev, condition:"GpuXidCritical", customer:"acme"},
       annotations:{summary:("summary " + $a), description:("description " + $a)},
@@ -122,6 +123,8 @@ check "new group -> brief in the shadow log" "BRIEF GpuFellOff on c2" "$(cat "$L
 check "new group -> log entry carries the IRM number" "IRM #103" "$(cat "$LOG")"
 check "new group -> line carries the node condition" '"condition":"GpuXidCritical"' "$(cat "$TMP/investigated")"
 lacks "new group -> customer label not passed on" '"customer"' "$(cat "$TMP/investigated")"
+check "new group -> line carries the IRM number" '"irm_number":103' "$(cat "$TMP/investigated")"
+check "new group -> line carries the Slack permalink" '"irm_url":"https://slack.example/archives/C1/p103"' "$(cat "$TMP/investigated")"
 
 # 3. Polling again changes nothing.
 : > "$TMP/investigated"

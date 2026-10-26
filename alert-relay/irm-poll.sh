@@ -97,7 +97,8 @@ for g in "${groups[@]}"; do
     | {status: "firing", alertname: ($a.labels.alertname // "Unknown"),
        severity: ($a.labels.severity // "warning"),
        summary: ($a.annotations.summary // ""), description: ($a.annotations.description // ""),
-       labels: ($a.labels | del(.customer)), starts_at: ($a.startsAt // "")}')
+       labels: ($a.labels | del(.customer)), starts_at: ($a.startsAt // ""),
+       irm_number: .alert_group_number, irm_url: (.permalinks.slack // .permalinks.web // "")}')
   # Two different checks. The same alert on the same node is one problem. The
   # same alert on other nodes is separate hardware and gets its own brief, up
   # to STORM_MAX per alert and cluster per window: a label rename that fires on

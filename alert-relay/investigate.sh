@@ -38,6 +38,10 @@ RUNBOOKS="$WORKSPACE/memory/runbooks"
 # Read-only kubeconfigs named <cluster>.kubeconfig. Node evidence is collected
 # only through these, never through whatever context the host defaults to.
 KUBECONFIG_DIR="${KUBECONFIG_DIR:-}"
+# Pre-filled DC hardware requests for real node faults. DC_PROVIDERS is a
+# private TSV: cluster, site, channel name, channel ID, how tickets open.
+DC_DRAFT_DIR="${DC_DRAFT_DIR:-}"
+DC_PROVIDERS="${DC_PROVIDERS:-}"
 MODEL="${MODEL:-nvidia/Nemotron-3-Ultra-550b-a55b}"
 INFERENCE_URL="${INFERENCE_URL:-https://inference.local/v1/chat/completions}"
 
@@ -305,19 +309,26 @@ $prev_cause
 RUNBOOK EXCERPT:
 $(printf '%s' "$runbook" | head -20)
 
-Reply format (plain text, six lines):
+Reply format (plain text, seven lines):
 ROOT CAUSE: <2 sentences>
 CONFIDENCE: <high|medium|low> - <the one evidence item it rests on>
 RULED OUT: <cause - evidence against it>; <cause - evidence against it>
 ACTION: <1 sentence>
 FAILURE MODE: <one word: change (deploy/config) | capacity (OOM, disk, CPU, quota) | dependency (upstream service or provider) | network (DNS, partition, LB) | hardware (GPU Xid/ECC, disk, NIC, node) | fabric (InfiniBand, NCCL) | control-plane (scheduling, operators) | other>
+FAULT: <real|false-alarm> - <why, citing evidence>. false-alarm only if the evidence shows this is not a fault on this node: a telemetry or exporter artifact, a condition already clear when the alert fired, or a known benign signal. A real fault that is already contained is still real.
 VERDICT: <page|hold> - <why, citing evidence>. page if a person must act before morning to stop customer impact or further damage; hold only if the evidence shows it is already contained (node cordoned and drained), cleared, or harmless until business hours. When unsure, page."
 
-analysis=$(jq -n --arg m "$MODEL" --arg p "$prompt" \
-  '{model:$m, messages:[{role:"user",content:$p}], max_tokens:1500}' \
-  | curl -sf -m 150 "$INFERENCE_URL" \
-      -H "Authorization: Bearer $NEBIUS_API_KEY" -H "Content-Type: application/json" \
-      -d @- 2>/dev/null | jq -r '.choices[0].message.content // "analysis unavailable"')
+ask_model() {
+  jq -n --arg m "$MODEL" --arg p "$prompt" \
+    '{model:$m, messages:[{role:"user",content:$p}], max_tokens:1500}' \
+    | curl -sf -m 150 "$INFERENCE_URL" \
+        -H "Authorization: Bearer $NEBIUS_API_KEY" -H "Content-Type: application/json" \
+        -d @- 2>/dev/null | jq -r '.choices[0].message.content // "analysis unavailable"'
+}
+# One retry: a single upstream blip would otherwise mark the brief degraded,
+# hold the shadow heartbeat and lose that alert's DC draft.
+analysis=$(ask_model)
+case "$analysis" in ""|"analysis unavailable") sleep 2; analysis=$(ask_model) ;; esac
 
 # Last match, not first: Nemotron reasons in the open and often echoes the
 # reply template ("ROOT CAUSE: <2 sentences>") before its real answer.
@@ -345,6 +356,48 @@ case "$verdict" in
   page|hold) verdict="$verdict - $(printf '%s' "$verdict_line" | sed 's/^[^ ]* *-* *//')" ;;
   *) verdict="page - no verdict given, defaulting to page" ;;
 esac
+# Real versus false alarm is a separate call from page versus hold: a dead GPU
+# on a drained node can wait for morning but still needs a ticket. Without a
+# call it reads as real, since a needless draft costs a skim and a missing one
+# costs a ticket.
+fault_line=$(printf '%s' "$analysis" | sed -n 's/^FAULT: *//p' | tail -1)
+fault=$(printf '%s' "$fault_line" | awk '{print tolower($1)}')
+case "$fault" in
+  real|false-alarm) fault="$fault - $(printf '%s' "$fault_line" | sed 's/^[^ ]* *-* *//')" ;;
+  *) fault="real - no fault call given, treating as real" ;;
+esac
+
+# A real hardware or fabric fault on a node is a request to the DC provider.
+# Draft it in the house format from what this read-only run can see; SSH
+# evidence, the node's IP and provider ID, and the cordon call stay with the
+# human finishing it, so the draft says what is missing. Nothing is sent.
+dc_draft=""
+if [ -n "$DC_DRAFT_DIR" ] && [ -r "$DC_PROVIDERS" ] && [ -n "$node" ] && [ "${fault%% *}" = real ]; then
+  case "$fm" in hardware|fabric)
+    prov=$(awk -F'\t' -v c="$cluster" '$1 == c' "$DC_PROVIDERS" | head -1)
+    if [ -n "$prov" ]; then
+      IFS=$'\t' read -r _ site chan chan_id ticket_note <<< "$prov"
+      irm_url=$(printf '%s' "$alert_json" | jq -r '.irm_url // ""')
+      irm_number=$(printf '%s' "$alert_json" | jq -r '.irm_number // ""' | tr -cd '0-9')
+      mkdir -p "$DC_DRAFT_DIR"
+      dc_draft="$DC_DRAFT_DIR/$date-${irm_number:+IRM$irm_number-}$node.md"
+      {
+        printf 'Hardware request — %s, %s: %s (cluster %s)\n\n' "$site" "$node" "$alertname" "$cluster"
+        printf 'Node:    %s — TODO: IP and provider ID from the inventory\n' "$node"
+        printf 'Serial:  TODO: sudo dmidecode -s system-serial-number on the node\n\n'
+        printf 'Symptom: %s since %s UTC. %s\n' "$alertname" "${starts_at:-unknown}" "$(printf '%s' "$rootcause" | clip 400)"
+        printf 'Node state read %s:\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        printf '%s\n' "$node_info" | sed 's/^/  /'
+        printf '\nRequest: TODO: the specific action (check counters / reseat / replace / open an RMA). Copilot verdict: %s\n' "$verdict"
+        printf 'Say whether the node stays in service. Physical work is the provider'"'"'s; drain belongs to whoever manages the cluster.\n\n'
+        printf 'Please open a ticket for this and share the case number.\n\n'
+        printf -- '---\nPost to: %s (%s) — %s\n' "$chan" "$chan_id" "$ticket_note"
+        printf 'Draft only, nothing was sent. Finish with: /file-dc-request %s\n' "${irm_url:-<alert link>}"
+        printf '(adds SSH evidence, the IP and provider ID, and the cordon decision, then drafts it in Slack)\n'
+      } > "$dc_draft"
+    fi ;;
+  esac
+fi
 
 # Latest report for a different alert with the same failure mode: the same
 # kind of failure can surface under another alert name.
@@ -381,6 +434,7 @@ ttb="$ttb after the alert fired"
   printf -- '- **Confidence**: %s\n' "$confidence"
   printf -- '- **Failure mode**: %s\n' "$fm"
   printf -- '- **Verdict**: %s\n' "$verdict"
+  printf -- '- **Fault**: %s\n' "$fault"
   [ -n "$degraded" ] && printf -- '- **Degraded**: %s\n' "$degraded"
   printf -- '- **Related**: %s\n\n' "$related"
   printf '## Root cause\n%s\n\n' "$rootcause"
@@ -404,12 +458,15 @@ ttb="$ttb after the alert fired"
 } > "$report"
 
 # --- Telegram brief on stdout (cron announce delivers it) ---
-printf 'ALERT: %s (%s)\nService: %s\nLikely cause: %s\nConfidence: %s\nVerdict: %s\nPrevious: %s\nFailure mode: %s (related: %s)\nEvidence: err_ratio=%s heap=%s latency_mode=%s\nSuggested: %s\nBriefed %s\n' \
+printf 'ALERT: %s (%s)\nService: %s\nLikely cause: %s\nConfidence: %s\nVerdict: %s\nFault: %s\nPrevious: %s\nFailure mode: %s (related: %s)\nEvidence: err_ratio=%s heap=%s latency_mode=%s\nSuggested: %s\nBriefed %s\n' \
   "$alertname" "$severity" "$subject" "$(printf '%s' "$rootcause" | clip 200)" \
-  "$(printf '%s' "$confidence" | clip 120)" "$(printf '%s' "$verdict" | clip 160)" "$prev_seen" "$fm" "$related" \
+  "$(printf '%s' "$confidence" | clip 120)" "$(printf '%s' "$verdict" | clip 160)" "$(printf '%s' "$fault" | clip 160)" "$prev_seen" "$fm" "$related" \
   "$err_ratio" "$heap" "$lat_mode" "$(printf '%s' "$action" | clip 120)" "$ttb"
 if [ -n "$degraded" ]; then
   printf 'Degraded: %s\n' "$degraded"
+fi
+if [ -n "$dc_draft" ]; then
+  printf 'DC draft: %s\n' "$dc_draft"
 fi
 }
 
