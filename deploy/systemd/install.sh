@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Install the shadow-mode poller on the copilot host as the oncall-copilot user.
+# Expects the user, its env, kubeconfigs and repo clone from the Phase 0 setup.
+# Run on the host with sudo rights: bash deploy/systemd/install.sh
+set -euo pipefail
+U=oncall-copilot
+H=/var/lib/oncall-copilot
+SRC="$H/oncall-copilot/deploy/systemd"
+
+sudo -H -u "$U" git -C "$H/oncall-copilot" pull -q --ff-only
+sudo -H -u "$U" mkdir -p "$H/ws/memory/incidents" "$H/ws/memory/runbooks"
+sudo -H -u "$U" ln -sfn "$H/oncall-copilot/skills" "$H/ws/skills"
+
+sudo install -m 644 "$SRC/oncall-copilot-poll.service" "$SRC/oncall-copilot-poll.timer" /etc/systemd/system/
+sudo systemctl daemon-reload
+
+# One run by hand first: on a fresh state dir it only records existing groups.
+sudo systemctl start oncall-copilot-poll.service
+sudo journalctl -u oncall-copilot-poll.service -n 5 --no-pager -o cat
+
+sudo systemctl enable --now oncall-copilot-poll.timer
+systemctl list-timers oncall-copilot-poll.timer --no-pager
+echo "briefs: $H/.local/state/oncall-copilot/briefs.log (read with: sudo tail -f ...)"

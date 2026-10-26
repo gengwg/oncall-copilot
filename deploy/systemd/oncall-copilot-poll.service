@@ -1,0 +1,29 @@
+[Unit]
+Description=On-call copilot shadow poll of Grafana IRM (no writes to IRM or Slack)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=oncall-copilot
+Group=oncall-copilot
+# The env file sets PROMETHEUS_TOKEN=$GRAFANA_TOKEN, which EnvironmentFile=
+# would not expand, so bash sources it.
+ExecStart=/usr/bin/bash -c 'set -a; . /var/lib/oncall-copilot/.config/oncall-copilot/env; set +a; \
+  export WORKSPACE=/var/lib/oncall-copilot/ws; \
+  exec bash /var/lib/oncall-copilot/oncall-copilot/alert-relay/irm-poll.sh'
+# Several investigations in one poll can each wait up to 150s on the model.
+TimeoutStartSec=900
+# The credentials are read-only; this keeps the process away from everything
+# else on the host, including /home where the admin kubeconfigs live.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/oncall-copilot
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+CapabilityBoundingSet=
