@@ -305,12 +305,13 @@ $prev_cause
 RUNBOOK EXCERPT:
 $(printf '%s' "$runbook" | head -20)
 
-Reply format (plain text, five lines):
+Reply format (plain text, six lines):
 ROOT CAUSE: <2 sentences>
 CONFIDENCE: <high|medium|low> - <the one evidence item it rests on>
 RULED OUT: <cause - evidence against it>; <cause - evidence against it>
 ACTION: <1 sentence>
-FAILURE MODE: <one word: change (deploy/config) | capacity (OOM, disk, CPU, quota) | dependency (upstream service or provider) | network (DNS, partition, LB) | hardware (GPU Xid/ECC, disk, NIC, node) | fabric (InfiniBand, NCCL) | control-plane (scheduling, operators) | other>"
+FAILURE MODE: <one word: change (deploy/config) | capacity (OOM, disk, CPU, quota) | dependency (upstream service or provider) | network (DNS, partition, LB) | hardware (GPU Xid/ECC, disk, NIC, node) | fabric (InfiniBand, NCCL) | control-plane (scheduling, operators) | other>
+VERDICT: <page|hold> - <why, citing evidence>. page if a person must act before morning to stop customer impact or further damage; hold only if the evidence shows it is already contained (node cordoned and drained), cleared, or harmless until business hours. When unsure, page."
 
 analysis=$(jq -n --arg m "$MODEL" --arg p "$prompt" \
   '{model:$m, messages:[{role:"user",content:$p}], max_tokens:1500}' \
@@ -330,6 +331,15 @@ ruled_out=$(printf '%s' "$analysis" | sed -n 's/^RULED OUT: *//p' | tail -1)
 [ -z "$ruled_out" ] && ruled_out="n/a"
 fm=$(printf '%s' "$analysis" | sed -n 's/^FAILURE MODE: *//p' | tail -1 | awk '{print tolower($1)}')
 case "$fm" in change|capacity|dependency|network|hardware|fabric|control-plane) ;; *) fm=other ;; esac
+# Shadow-mode verdict, logged for comparison with what on-call actually did.
+# Anything but an explicit hold reads as page: a wrong page costs sleep, a
+# wrong hold costs an outage.
+verdict_line=$(printf '%s' "$analysis" | sed -n 's/^VERDICT: *//p' | tail -1)
+verdict=$(printf '%s' "$verdict_line" | awk '{print tolower($1)}')
+case "$verdict" in
+  page|hold) verdict="$verdict - $(printf '%s' "$verdict_line" | sed 's/^[^ ]* *-* *//')" ;;
+  *) verdict="page - no verdict given, defaulting to page" ;;
+esac
 
 # Latest report for a different alert with the same failure mode: the same
 # kind of failure can surface under another alert name.
@@ -365,6 +375,7 @@ ttb="$ttb after the alert fired"
   printf -- '- **Previous**: %s\n' "$prev_seen"
   printf -- '- **Confidence**: %s\n' "$confidence"
   printf -- '- **Failure mode**: %s\n' "$fm"
+  printf -- '- **Verdict**: %s\n' "$verdict"
   printf -- '- **Related**: %s\n\n' "$related"
   printf '## Root cause\n%s\n\n' "$rootcause"
   printf '## Ruled out\n%s\n\n' "$ruled_out"
@@ -387,9 +398,9 @@ ttb="$ttb after the alert fired"
 } > "$report"
 
 # --- Telegram brief on stdout (cron announce delivers it) ---
-printf 'ALERT: %s (%s)\nService: %s\nLikely cause: %s\nConfidence: %s\nPrevious: %s\nFailure mode: %s (related: %s)\nEvidence: err_ratio=%s heap=%s latency_mode=%s\nSuggested: %s\nBriefed %s\n' \
+printf 'ALERT: %s (%s)\nService: %s\nLikely cause: %s\nConfidence: %s\nVerdict: %s\nPrevious: %s\nFailure mode: %s (related: %s)\nEvidence: err_ratio=%s heap=%s latency_mode=%s\nSuggested: %s\nBriefed %s\n' \
   "$alertname" "$severity" "$subject" "$(printf '%s' "$rootcause" | clip 200)" \
-  "$(printf '%s' "$confidence" | clip 120)" "$prev_seen" "$fm" "$related" \
+  "$(printf '%s' "$confidence" | clip 120)" "$(printf '%s' "$verdict" | clip 160)" "$prev_seen" "$fm" "$related" \
   "$err_ratio" "$heap" "$lat_mode" "$(printf '%s' "$action" | clip 120)" "$ttb"
 }
 
