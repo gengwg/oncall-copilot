@@ -96,12 +96,26 @@ class H(BaseHTTPRequestHandler):
         req = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))))
         with open(sys.argv[2], 'w') as f:
             f.write(req['messages'][0]['content'])
+        # A <prompt-file>.failonce flag fails one request, like an upstream blip.
+        if os.path.exists(sys.argv[2] + ".failonce"):
+            os.remove(sys.argv[2] + ".failonce")
+            self.send_response(502); self.end_headers(); return
         # Nemotron thinks out loud and often echoes the reply template before
         # its real answer; the parser must take the answer, not the template.
         # A <prompt-file>.noverdict flag drops the real VERDICT line, leaving
         # only the echoed template one.
         verdict = "" if os.path.exists(sys.argv[2] + ".noverdict") else \
             "\nVERDICT: Hold - chaos was injected in the demo; nothing customer-facing"
+        # A .hwpage flag ends the reply as a hardware fault worth a page; the
+        # parser takes the last match, so these override the lines above.
+        # .hwhold is the same fault already contained (real, but can wait);
+        # .hwfalse is an exporter artifact that only looks like hardware.
+        if os.path.exists(sys.argv[2] + ".hwpage"):
+            verdict += "\nFAILURE MODE: hardware - GPU off the bus\nFAULT: real - Xid 79 condition is active\nVERDICT: page - GPU 3 fell off the bus and needs remote hands"
+        if os.path.exists(sys.argv[2] + ".hwhold"):
+            verdict += "\nFAILURE MODE: hardware - GPU off the bus\nFAULT: real - Xid 79 condition is active\nVERDICT: hold - node already cordoned and drained"
+        if os.path.exists(sys.argv[2] + ".hwfalse"):
+            verdict += "\nFAILURE MODE: hardware - looks like NVLink\nFAULT: false-alarm - known exporter artifact, links verified up\nVERDICT: hold - not a fault"
         body = json.dumps({"choices": [{"message": {"content":
             "Need to output in format:\nROOT CAUSE: <2 sentences>\nCONFIDENCE: <high|medium|low>\n"
             "RULED OUT: <cause - evidence against it>\nACTION: <1 sentence>\nFAILURE MODE: <one word>\n"
@@ -152,8 +166,16 @@ post_node_alert() { # post_node_alert <alertname> <cluster> <node> [condition] [
         startsAt:$at}]}')" >/dev/null
 }
 
-run_investigate() { # run_investigate [env assignments...] ; sets OUT/ERR/RC
-  local out err rc
+run_investigate() { # run_investigate [env assignments...] ; drains the relay; sets OUT/ERR/RC
+  _run_investigate "" "$@"
+}
+run_investigate_line() { # run_investigate_line <alert-json-line> [env assignments...] ; as the poller calls it
+  _run_investigate "$@"
+}
+_run_investigate() {
+  local out err rc line="$1" args=()
+  shift
+  [ -n "$line" ] && args=("$line")
   out=$(mktemp); err=$(mktemp)
   env WORKSPACE="$TMP/ws" \
       ALERT_RELAY_URL="http://127.0.0.1:$RELAY_PORT" \
@@ -162,7 +184,7 @@ run_investigate() { # run_investigate [env assignments...] ; sets OUT/ERR/RC
       INFERENCE_URL="http://127.0.0.1:$INFER_PORT/v1/chat/completions" \
       TAVILY_API_KEY= \
       "$@" \
-      bash "$ROOT/alert-relay/investigate.sh" > "$out" 2> "$err"
+      bash "$ROOT/alert-relay/investigate.sh" "${args[@]}" > "$out" 2> "$err"
   rc=$?
   OUT=$(cat "$out"); ERR=$(cat "$err"); RC=$rc
   rm -f "$out" "$err"
@@ -466,6 +488,65 @@ curl -sf -m 2 -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$RELAY_PORT/al
 post_alert DemoHighErrorRate
 run_investigate INFERENCE_URL="http://127.0.0.1:9/v1/chat/completions"
 check "model unreachable -> brief marked degraded" "Degraded: model call failed" "$OUT"
+
+# One upstream blip is retried, not turned into a degraded brief.
+curl -sf -m 2 -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$RELAY_PORT/alerts" >/dev/null
+post_alert DemoHighErrorRate
+touch "$TMP/last_prompt.failonce"
+run_investigate
+lacks_out=$OUT
+case "$lacks_out" in
+  *"Degraded:"*) bad "one model failure -> retried" "still degraded: $lacks_out" ;;
+  *) ok "one model failure -> retried" ;;
+esac
+check "one model failure -> retried brief is complete" "Likely cause: Injected upstream dial timeouts" "$OUT"
+
+# 19. A real hardware fault (verdict page, failure mode hardware/fabric) on a
+#     cluster with a DC provider gets a pre-filled request in the house format.
+#     It names what is still missing, so it cannot pass for ready to send.
+printf 'c1\tsite-one\t#ext-site-one\tC0TEST1\tticket opens from a :ticket: reaction\n' > "$TMP/dc-providers.tsv"
+mkdir -p "$TMP/dc"
+DC=(PATH="$TMP/bin:$PATH" KUBECONFIG_DIR="$TMP/kc" DC_DRAFT_DIR="$TMP/dc" DC_PROVIDERS="$TMP/dc-providers.tsv")
+node_line() { # node_line <cluster>: the line the poller builds for a real node alert
+  jq -nc --arg c "$1" '{status:"firing", alertname:"GPU Xid Critical", severity:"warning",
+    summary:"Critical GPU Xid on gpu-node-7", description:"node-problem-detector latched XidCritical",
+    labels:{cluster:$c, node:"gpu-node-7", condition:"XidCritical"}, starts_at:"2026-10-25T09:04:00Z",
+    irm_number:5157, irm_url:"https://slack.example/archives/C1/p123"}'
+}
+touch "$TMP/last_prompt.hwpage"
+run_investigate_line "$(node_line c1)" "${DC[@]}"
+draft=$(cat "$TMP"/dc/*.md 2>/dev/null)
+check "hardware page -> draft headed in the house format" "Hardware request — site-one, gpu-node-7:" "$draft"
+check "hardware page -> draft names the cluster" "(cluster c1)" "$draft"
+check "hardware page -> draft says where to post" "Post to: #ext-site-one (C0TEST1)" "$draft"
+check "hardware page -> draft carries the node evidence" "condition XidCritical=True: NVRM: Xid" "$draft"
+check "hardware page -> draft marks what is missing" "TODO: IP" "$draft"
+check "hardware page -> draft gives the command to finish it" "/file-dc-request https://slack.example/archives/C1/p123" "$draft"
+check "hardware page -> brief points at the draft" "DC draft: $TMP/dc/" "$OUT"
+
+check "hardware page -> prompt asks whether the fault is real" "FAULT: <real|false-alarm>" "$(cat "$TMP/last_prompt")"
+check "hardware page -> brief carries the fault call" "Fault: real - Xid 79 condition is active" "$OUT"
+
+# A real fault that can wait still needs the ticket: urgency is not realness.
+command rm -f "$TMP"/dc/*.md "$TMP/last_prompt.hwpage"
+touch "$TMP/last_prompt.hwhold"
+run_investigate_line "$(node_line c1)" "${DC[@]}"
+rm -f "$TMP/last_prompt.hwhold"
+if ls "$TMP"/dc/*.md >/dev/null 2>&1; then ok "real fault held -> still drafted"; else bad "real fault held -> still drafted" "no draft for a real, contained fault"; fi
+
+# A false alarm, or a cluster with no DC provider, gets no draft.
+command rm -f "$TMP"/dc/*.md
+touch "$TMP/last_prompt.hwfalse"
+run_investigate_line "$(node_line c1)" "${DC[@]}"
+rm -f "$TMP/last_prompt.hwfalse"
+touch "$TMP/last_prompt.hwpage"
+run_investigate_line "$(node_line c2)" "${DC[@]}"
+rm -f "$TMP/last_prompt.hwpage"
+if ls "$TMP"/dc/*.md >/dev/null 2>&1; then
+  bad "false alarm or no provider -> no draft" "$(ls "$TMP/dc")"
+else
+  ok "false alarm or no provider -> no draft"
+fi
 
 echo
 echo "passed: $PASS  failed: $FAIL"
