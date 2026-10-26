@@ -10,7 +10,8 @@
 #      STATE_DIR (default ~/.local/state/oncall-copilot), SHADOW_LOG,
 #      INVESTIGATE (default investigate.sh next to this script),
 #      STORM_WINDOW_S (default 1800), STORM_MAX (default 5),
-#      SEVERITIES (default "critical warning").
+#      SEVERITIES (default "critical warning"),
+#      HEARTBEAT_URL (optional IRM heartbeat endpoint; holds a secret).
 # Usage: irm-poll.sh   (run every 30-60s from a timer)
 set -uo pipefail
 
@@ -27,6 +28,15 @@ STORM="$STATE_DIR/storm"
 mkdir -p "$STATE_DIR"
 exec 9>>"$STATE_DIR/.poll.lock"
 flock -n 9 || exit 0
+
+# Pinged only after a successful poll, so IRM alerts on anything that stops
+# them: a dead timer, a down host, or a refused or expired token. The URL is
+# never printed because it carries the heartbeat's secret.
+heartbeat() {
+  [ -n "${HEARTBEAT_URL:-}" ] || return 0
+  curl -fsS -m 10 -o /dev/null "$HEARTBEAT_URL" 2>/dev/null \
+    || echo "warn: heartbeat ping failed; IRM will alert if pings stay missing" >&2
+}
 
 body=$(mktemp)
 trap 'rm -f "$body"' EXIT
@@ -45,6 +55,7 @@ fi
 if [ ! -f "$SEEN" ]; then
   jq -r '.results[].id' "$body" > "$SEEN"
   echo "bootstrapped $(wc -l < "$SEEN") existing alert groups; investigating new ones from now on"
+  heartbeat
   exit 0
 fi
 
@@ -104,4 +115,5 @@ done
 # Bound the state files.
 tail -n 2000 "$SEEN" > "$SEEN.tmp" && mv "$SEEN.tmp" "$SEEN"
 [ -f "$STORM" ] && tail -n 500 "$STORM" > "$STORM.tmp" && mv "$STORM.tmp" "$STORM"
+heartbeat
 exit 0

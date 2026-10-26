@@ -39,9 +39,14 @@ lacks() { # lacks <name> <unexpected-substring> <actual>
 cat > "$TMP/stub.py" <<'EOF'
 import json, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
-port, token, groups = int(sys.argv[1]), sys.argv[2], sys.argv[3]
+port, token, groups, beats = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
 class H(BaseHTTPRequestHandler):
     def do_GET(self):
+        # IRM heartbeat URLs carry their secret in the path, no bearer token.
+        if self.path.startswith("/heartbeat/"):
+            with open(beats, "a") as f:
+                f.write(self.path + "\n")
+            self.send_response(200); self.end_headers(); return
         if self.headers.get("Authorization") != f"Bearer {token}" or not self.headers.get("X-Grafana-URL"):
             self.send_response(401); self.end_headers(); return
         if not self.path.startswith("/api/v1/alert_groups/"):
@@ -54,7 +59,8 @@ class H(BaseHTTPRequestHandler):
 HTTPServer(("127.0.0.1", port), H).serve_forever()
 EOF
 echo '[]' > "$TMP/groups.json"
-python3 "$TMP/stub.py" "$PORT" "$TOKEN" "$TMP/groups.json" &
+: > "$TMP/heartbeats"
+python3 "$TMP/stub.py" "$PORT" "$TOKEN" "$TMP/groups.json" "$TMP/heartbeats" &
 STUB_PID=$!
 for _ in $(seq 50); do
   curl -s -o /dev/null "http://127.0.0.1:$PORT/" && break
@@ -148,6 +154,23 @@ run_poll GRAFANA_TOKEN=wrong
 [ "$RC" -ne 0 ] && ok "IRM 401 -> nonzero exit" || bad "IRM 401 -> nonzero exit" "rc=$RC"
 check "IRM 401 -> says so on stderr" "HTTP 401" "$ERR"
 cmp -s "$TMP/state/seen" "$TMP/seen.before" && ok "IRM 401 -> seen state unchanged" || bad "IRM 401 -> seen state unchanged" "seen file changed"
+
+# 8. Every successful poll pings the heartbeat, so IRM alerts when they stop.
+#    A refused token is not a success and must stop the pings too.
+HB="http://127.0.0.1:$PORT/heartbeat/s3cret"
+beats() { wc -l < "$TMP/heartbeats" | tr -d ' '; }
+run_poll HEARTBEAT_URL="$HB"
+[ "$(beats)" = 1 ] && ok "successful poll -> one heartbeat" || bad "successful poll -> one heartbeat" "beats=$(beats) rc=$RC"
+run_poll HEARTBEAT_URL="$HB" STATE_DIR="$TMP/state-fresh"
+[ "$(beats)" = 2 ] && ok "bootstrap poll -> heartbeat" || bad "bootstrap poll -> heartbeat" "beats=$(beats) rc=$RC"
+run_poll HEARTBEAT_URL="$HB" GRAFANA_TOKEN=wrong
+[ "$(beats)" = 2 ] && ok "IRM 401 -> no heartbeat" || bad "IRM 401 -> no heartbeat" "beats=$(beats)"
+
+# 9. An unreachable heartbeat endpoint is a warning, not a failed poll.
+run_poll HEARTBEAT_URL="http://127.0.0.1:9/heartbeat/x"
+[ "$RC" -eq 0 ] && ok "heartbeat unreachable -> poll still succeeds" || bad "heartbeat unreachable -> poll still succeeds" "rc=$RC"
+check "heartbeat unreachable -> warns" "heartbeat ping failed" "$ERR"
+lacks "heartbeat unreachable -> secret not echoed" "/heartbeat/x" "$ERR"
 
 echo
 echo "$PASS passed, $FAIL failed"
