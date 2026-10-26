@@ -11,7 +11,8 @@
 #      INVESTIGATE (default investigate.sh next to this script),
 #      STORM_WINDOW_S (default 1800), STORM_MAX (default 5),
 #      SEVERITIES (default "critical warning"),
-#      HEARTBEAT_URL (optional IRM heartbeat endpoint; holds a secret).
+#      HEARTBEAT_URL (optional IRM heartbeat endpoint; holds a secret),
+#      DEGRADED_HOLD_AFTER (default 2 degraded briefs in a row).
 # Usage: irm-poll.sh   (run every 30-60s from a timer)
 set -uo pipefail
 
@@ -22,9 +23,11 @@ INVESTIGATE="${INVESTIGATE:-$(dirname "$0")/investigate.sh}"
 STORM_WINDOW_S="${STORM_WINDOW_S:-1800}"
 STORM_MAX="${STORM_MAX:-5}"
 SEVERITIES="${SEVERITIES:-critical warning}"
+DEGRADED_HOLD_AFTER="${DEGRADED_HOLD_AFTER:-2}"
 SEEN="$STATE_DIR/seen"
 STORM="$STATE_DIR/storm"
 DEGRADED="$STATE_DIR/degraded"
+STREAK="$STATE_DIR/degraded-streak"
 
 mkdir -p "$STATE_DIR"
 exec 9>>"$STATE_DIR/.poll.lock"
@@ -34,8 +37,9 @@ flock -n 9 || exit 0
 # them: a dead timer, a down host, or a refused or expired token. The URL is
 # never printed because it carries the heartbeat's secret.
 #
-# Also held while the latest brief was degraded (model or evidence failure):
-# polls still succeed then, but the briefs are useless. It stays held on quiet
+# Also held once DEGRADED_HOLD_AFTER briefs in a row came out degraded (model
+# or evidence failure): polls still succeed then, but the briefs are useless.
+# One alone is usually an upstream blip and only warns. It stays held on quiet
 # polls, which cannot show the cause is fixed, until a later brief is healthy.
 heartbeat() {
   [ -n "${HEARTBEAT_URL:-}" ] || return 0
@@ -123,9 +127,17 @@ for g in "${groups[@]}"; do
   reason=$(printf '%s\n' "$brief" | sed -n 's/^Degraded: //p' | head -1)
   [ -z "$brief" ] && reason="investigation produced no brief"
   if [ -n "$reason" ]; then
-    printf '%s IRM #%s: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$num" "$reason" > "$DEGRADED"
+    n=$(cat "$STREAK" 2>/dev/null)
+    case "$n" in ''|*[!0-9]*) n=0 ;; esac
+    n=$((n + 1))
+    echo "$n" > "$STREAK"
+    if [ "$n" -ge "$DEGRADED_HOLD_AFTER" ]; then
+      printf '%s IRM #%s: %s (%s in a row)\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$num" "$reason" "$n" > "$DEGRADED"
+    else
+      echo "warn: $n degraded brief in a row (IRM #$num: $reason); the heartbeat is held from $DEGRADED_HOLD_AFTER" >&2
+    fi
   else
-    rm -f "$DEGRADED"
+    rm -f "$DEGRADED" "$STREAK"
   fi
 done
 
