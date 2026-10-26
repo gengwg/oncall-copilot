@@ -431,6 +431,12 @@ if [ -s "$TMP/kubectl.args" ]; then
 else
   ok "no kubeconfig -> kubectl not run"
 fi
+# With metrics and logs empty too, the warning names the missing kubeconfig
+# rather than only "every query returned nothing".
+curl -sf -m 2 -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$RELAY_PORT/alerts" >/dev/null
+post_node_alert GPUXidCritical c2 gpu-node-9
+run_investigate PATH="$TMP/bin:$PATH" KUBECONFIG_DIR="$TMP/kc" STUB_PROM_EMPTY=1 STUB_LOKI_EMPTY=1
+check "no evidence + no kubeconfig -> warning names the cause" "node evidence not collected (no read-only kubeconfig for cluster c2)" "$ERR"
 
 echo
 echo "passed: $PASS  failed: $FAIL"

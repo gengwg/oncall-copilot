@@ -258,6 +258,7 @@ if [ "$up" = "n/a" ] && [ "$err_ratio" = "n/a" ] && [ "$heap" = "n/a" ] \
   echo "  checked: $PROM, $LOGQ against $PROMETHEUS_URL and $LOKI_URL" >&2
   [ -x "$PROM" ] || echo "  $PROM is not executable" >&2
   [ -x "$LOGQ" ] || echo "  $LOGQ is not executable" >&2
+  [ -n "$node_note" ] && echo "  node evidence $node_note" >&2
   evidence_broken=1
 fi
 err_string=$(printf '%s' "$err_logs" | head -1 | sed 's/^[^\t]*\t//' | jq -r 'try (.err // .msg // empty) catch empty' 2>/dev/null | head -1)
