@@ -179,24 +179,34 @@ run_poll HEARTBEAT_URL="http://127.0.0.1:9/heartbeat/x"
 check "heartbeat unreachable -> warns" "heartbeat ping failed" "$ERR"
 lacks "heartbeat unreachable -> secret not echoed" "/heartbeat/x" "$ERR"
 
-# 10. A degraded brief (model or evidence failure) stops the heartbeat, and it
-#     stays stopped on quiet polls until a later brief comes out healthy.
+# 10. One degraded brief can be an upstream blip and still pings. Two in a row
+#     (model or evidence failure) stop the heartbeat, which stays stopped on
+#     quiet polls until a later brief comes out healthy.
 : > "$TMP/heartbeats"
 set_groups "$(group D1 301 new ModelDownA c10 critical)"
 run_poll HEARTBEAT_URL="$HB"
-[ "$(beats)" = 0 ] && ok "degraded brief -> no heartbeat" || bad "degraded brief -> no heartbeat" "beats=$(beats)"
-[ "$RC" -eq 0 ] && ok "degraded brief -> poll still succeeds" || bad "degraded brief -> poll still succeeds" "rc=$RC"
-check "degraded brief -> says why the heartbeat is held" "model call failed" "$ERR"
+[ "$(beats)" = 1 ] && ok "one degraded brief -> still pings" || bad "one degraded brief -> still pings" "beats=$(beats)"
+check "one degraded brief -> noted" "1 degraded brief in a row" "$ERR"
+set_groups "$(group D2 302 new ModelDownB c11 critical)" "$(group D1 301 new ModelDownA c10 critical)"
 run_poll HEARTBEAT_URL="$HB"
-[ "$(beats)" = 0 ] && ok "degraded, quiet poll -> still no heartbeat" || bad "degraded, quiet poll -> still no heartbeat" "beats=$(beats)"
-set_groups "$(group D2 302 new HealthyAgain c11 critical)" "$(group D1 301 new ModelDownA c10 critical)"
+[ "$(beats)" = 1 ] && ok "two degraded in a row -> no heartbeat" || bad "two degraded in a row -> no heartbeat" "beats=$(beats)"
+[ "$RC" -eq 0 ] && ok "two degraded in a row -> poll still succeeds" || bad "two degraded in a row -> poll still succeeds" "rc=$RC"
+check "two degraded in a row -> says why the heartbeat is held" "model call failed" "$ERR"
 run_poll HEARTBEAT_URL="$HB"
-[ "$(beats)" = 1 ] && ok "healthy brief -> heartbeat resumes" || bad "healthy brief -> heartbeat resumes" "beats=$(beats)"
+[ "$(beats)" = 1 ] && ok "held, quiet poll -> still no heartbeat" || bad "held, quiet poll -> still no heartbeat" "beats=$(beats)"
+set_groups "$(group D3 303 new HealthyAgain c12 critical)" "$(group D2 302 new ModelDownB c11 critical)"
+run_poll HEARTBEAT_URL="$HB"
+[ "$(beats)" = 2 ] && ok "healthy brief -> heartbeat resumes" || bad "healthy brief -> heartbeat resumes" "beats=$(beats)"
+
+# A healthy brief resets the count: one later failure does not hold.
+set_groups "$(group D4 304 new ModelDownC c13 critical)" "$(group D3 303 new HealthyAgain c12 critical)"
+run_poll HEARTBEAT_URL="$HB"
+[ "$(beats)" = 3 ] && ok "isolated failure after recovery -> still pings" || bad "isolated failure after recovery -> still pings" "beats=$(beats)"
 
 # 11. An investigation that prints no brief at all counts as degraded.
-set_groups "$(group D3 303 new NoBriefX c12 critical)" "$(group D2 302 new HealthyAgain c11 critical)"
+set_groups "$(group D5 305 new NoBriefX c14 critical)" "$(group D4 304 new ModelDownC c13 critical)"
 run_poll HEARTBEAT_URL="$HB"
-[ "$(beats)" = 1 ] && ok "no brief -> no heartbeat" || bad "no brief -> no heartbeat" "beats=$(beats)"
+[ "$(beats)" = 3 ] && ok "no brief after a degraded one -> no heartbeat" || bad "no brief after a degraded one -> no heartbeat" "beats=$(beats)"
 check "no brief -> reason given" "produced no brief" "$ERR"
 
 echo
