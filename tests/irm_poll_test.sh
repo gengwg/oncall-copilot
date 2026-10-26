@@ -67,11 +67,15 @@ for _ in $(seq 50); do
   sleep 0.1
 done
 
-# Stub investigator: records the alert line, prints a one-line brief.
+# Stub investigator: records the alert line, prints a one-line brief. An
+# alertname starting with ModelDown adds a Degraded line, NoBrief prints nothing.
 cat > "$TMP/investigate.sh" <<EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$1" >> "$TMP/investigated"
-printf 'BRIEF %s on %s\n' "\$(printf '%s' "\$1" | jq -r .alertname)" "\$(printf '%s' "\$1" | jq -r .labels.cluster)"
+a=\$(printf '%s' "\$1" | jq -r .alertname)
+case "\$a" in NoBrief*) exit 0 ;; esac
+printf 'BRIEF %s on %s\n' "\$a" "\$(printf '%s' "\$1" | jq -r .labels.cluster)"
+case "\$a" in ModelDown*) echo "Degraded: model call failed" ;; esac
 EOF
 chmod +x "$TMP/investigate.sh"
 : > "$TMP/investigated"
@@ -171,6 +175,26 @@ run_poll HEARTBEAT_URL="http://127.0.0.1:9/heartbeat/x"
 [ "$RC" -eq 0 ] && ok "heartbeat unreachable -> poll still succeeds" || bad "heartbeat unreachable -> poll still succeeds" "rc=$RC"
 check "heartbeat unreachable -> warns" "heartbeat ping failed" "$ERR"
 lacks "heartbeat unreachable -> secret not echoed" "/heartbeat/x" "$ERR"
+
+# 10. A degraded brief (model or evidence failure) stops the heartbeat, and it
+#     stays stopped on quiet polls until a later brief comes out healthy.
+: > "$TMP/heartbeats"
+set_groups "$(group D1 301 new ModelDownA c10 critical)"
+run_poll HEARTBEAT_URL="$HB"
+[ "$(beats)" = 0 ] && ok "degraded brief -> no heartbeat" || bad "degraded brief -> no heartbeat" "beats=$(beats)"
+[ "$RC" -eq 0 ] && ok "degraded brief -> poll still succeeds" || bad "degraded brief -> poll still succeeds" "rc=$RC"
+check "degraded brief -> says why the heartbeat is held" "model call failed" "$ERR"
+run_poll HEARTBEAT_URL="$HB"
+[ "$(beats)" = 0 ] && ok "degraded, quiet poll -> still no heartbeat" || bad "degraded, quiet poll -> still no heartbeat" "beats=$(beats)"
+set_groups "$(group D2 302 new HealthyAgain c11 critical)" "$(group D1 301 new ModelDownA c10 critical)"
+run_poll HEARTBEAT_URL="$HB"
+[ "$(beats)" = 1 ] && ok "healthy brief -> heartbeat resumes" || bad "healthy brief -> heartbeat resumes" "beats=$(beats)"
+
+# 11. An investigation that prints no brief at all counts as degraded.
+set_groups "$(group D3 303 new NoBriefX c12 critical)" "$(group D2 302 new HealthyAgain c11 critical)"
+run_poll HEARTBEAT_URL="$HB"
+[ "$(beats)" = 1 ] && ok "no brief -> no heartbeat" || bad "no brief -> no heartbeat" "beats=$(beats)"
+check "no brief -> reason given" "produced no brief" "$ERR"
 
 echo
 echo "$PASS passed, $FAIL failed"

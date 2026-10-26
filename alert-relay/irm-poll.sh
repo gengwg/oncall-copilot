@@ -24,6 +24,7 @@ STORM_MAX="${STORM_MAX:-5}"
 SEVERITIES="${SEVERITIES:-critical warning}"
 SEEN="$STATE_DIR/seen"
 STORM="$STATE_DIR/storm"
+DEGRADED="$STATE_DIR/degraded"
 
 mkdir -p "$STATE_DIR"
 exec 9>>"$STATE_DIR/.poll.lock"
@@ -32,8 +33,16 @@ flock -n 9 || exit 0
 # Pinged only after a successful poll, so IRM alerts on anything that stops
 # them: a dead timer, a down host, or a refused or expired token. The URL is
 # never printed because it carries the heartbeat's secret.
+#
+# Also held while the latest brief was degraded (model or evidence failure):
+# polls still succeed then, but the briefs are useless. It stays held on quiet
+# polls, which cannot show the cause is fixed, until a later brief is healthy.
 heartbeat() {
   [ -n "${HEARTBEAT_URL:-}" ] || return 0
+  if [ -f "$DEGRADED" ]; then
+    echo "warn: not pinging the heartbeat; latest brief degraded: $(cat "$DEGRADED")" >&2
+    return 0
+  fi
   curl -fsS -m 10 -o /dev/null "$HEARTBEAT_URL" 2>/dev/null \
     || echo "warn: heartbeat ping failed; IRM will alert if pings stay missing" >&2
 }
@@ -110,6 +119,13 @@ for g in "${groups[@]}"; do
 
   brief=$(bash "$INVESTIGATE" "$line" 2>>"$STATE_DIR/investigate.err")
   log "$num" "$id" "${brief:-investigation produced no brief (see $STATE_DIR/investigate.err)}"
+  reason=$(printf '%s\n' "$brief" | sed -n 's/^Degraded: //p' | head -1)
+  [ -z "$brief" ] && reason="investigation produced no brief"
+  if [ -n "$reason" ]; then
+    printf '%s IRM #%s: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$num" "$reason" > "$DEGRADED"
+  else
+    rm -f "$DEGRADED"
+  fi
 done
 
 # Bound the state files.

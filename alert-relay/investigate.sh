@@ -329,6 +329,11 @@ ruled_out=$(printf '%s' "$analysis" | sed -n 's/^RULED OUT: *//p' | tail -1)
 [ -z "$action" ] && action="See runbook."
 [ -z "$confidence" ] && confidence="n/a"
 [ -z "$ruled_out" ] && ruled_out="n/a"
+# Said outright so the shadow poller can stop its heartbeat: a brief written
+# without the model or without the node it is about still "succeeds".
+degraded=""
+case "$analysis" in ""|"analysis unavailable") degraded="model call failed" ;; esac
+[ -n "$node_note" ] && degraded="${degraded:+$degraded; }node evidence $node_note"
 fm=$(printf '%s' "$analysis" | sed -n 's/^FAILURE MODE: *//p' | tail -1 | awk '{print tolower($1)}')
 case "$fm" in change|capacity|dependency|network|hardware|fabric|control-plane) ;; *) fm=other ;; esac
 # Shadow-mode verdict, logged for comparison with what on-call actually did.
@@ -376,6 +381,7 @@ ttb="$ttb after the alert fired"
   printf -- '- **Confidence**: %s\n' "$confidence"
   printf -- '- **Failure mode**: %s\n' "$fm"
   printf -- '- **Verdict**: %s\n' "$verdict"
+  [ -n "$degraded" ] && printf -- '- **Degraded**: %s\n' "$degraded"
   printf -- '- **Related**: %s\n\n' "$related"
   printf '## Root cause\n%s\n\n' "$rootcause"
   printf '## Ruled out\n%s\n\n' "$ruled_out"
@@ -402,6 +408,9 @@ printf 'ALERT: %s (%s)\nService: %s\nLikely cause: %s\nConfidence: %s\nVerdict: 
   "$alertname" "$severity" "$subject" "$(printf '%s' "$rootcause" | clip 200)" \
   "$(printf '%s' "$confidence" | clip 120)" "$(printf '%s' "$verdict" | clip 160)" "$prev_seen" "$fm" "$related" \
   "$err_ratio" "$heap" "$lat_mode" "$(printf '%s' "$action" | clip 120)" "$ttb"
+if [ -n "$degraded" ]; then
+  printf 'Degraded: %s\n' "$degraded"
+fi
 }
 
 briefed=0
