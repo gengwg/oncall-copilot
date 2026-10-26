@@ -211,22 +211,28 @@ if [ -n "$node" ]; then
     alert_cond=$(printf '%s' "$alert_json" | jq -r '.labels.condition // ""')
     # A condition that was already False when the alert fired is a different
     # story (stale or misrouted alert) from one that cleared afterwards.
+    # Kubernetes' own node conditions (MemoryPressure, ...) and
+    # node-problem-detector's are normal when False. Health-check conditions
+    # named like *Passed / *Healthy / *Completed read the other way round:
+    # True is normal, False is the failed check. Without this a node lists
+    # every passing check and hides the failed ones.
     node_info=$("${k[@]}" get node "$node" -o json 2>/dev/null | jq -r --arg cond "$alert_cond" --argjson fired "$start_s" '
+      def normal: if (.type | test("(Passed|Healthy|OK|Available|Completed)$")) then "True" else "False" end;
       (if $cond == "" then empty else
         ([.status.conditions[]? | select(.type == $cond)] | first) as $c
         | if $c == null then "alert condition " + $cond + ": not reported by this node"
-          elif $c.status == "False" then
+          elif $c.status == ($c | normal) then
             ($c.lastTransitionTime // "") as $at
             | (try ($at[0:19] + "Z" | fromdateiso8601) catch 0) as $t
-            | if $fired > 0 and $t > 0 and $t >= $fired then "alert condition " + $cond + ": False now, cleared after the alert fired (at " + $at + ")"
-              elif $fired > 0 and $t > 0 then "alert condition " + $cond + ": False since " + $at + ", already clear when the alert fired"
-              else "alert condition " + $cond + ": False now (last transition " + ($at | if . == "" then "unknown" else . end) + ")" end
+            | if $fired > 0 and $t > 0 and $t >= $fired then "alert condition " + $cond + ": " + $c.status + " now, cleared after the alert fired (at " + $at + ")"
+              elif $fired > 0 and $t > 0 then "alert condition " + $cond + ": " + $c.status + " since " + $at + ", already clear when the alert fired"
+              else "alert condition " + $cond + ": " + $c.status + " now (last transition " + ($at | if . == "" then "unknown" else . end) + ")" end
           else "alert condition " + $cond + ": " + $c.status + " now, still active" end
       end),
       "ready: " + ([.status.conditions[]? | select(.type=="Ready") | .status + " (" + (.reason // "") + ")"] | first // "unknown"),
       "cordoned: " + ((.spec.unschedulable // false) | tostring),
       "taints: " + ([.spec.taints[]? | .key + ":" + .effect] | join(", ") | if . == "" then "none" else . end),
-      ([.status.conditions[]? | select(.type != "Ready" and .status != "False")]
+      ([.status.conditions[]? | select(.type != "Ready" and .status != normal)]
         | if length == 0 then "abnormal conditions now: none"
           else .[] | "condition " + .type + "=" + .status + ": " + ((.message // .reason // "") | .[0:240]) end)' 2>/dev/null)
     if [ -n "$node_info" ]; then

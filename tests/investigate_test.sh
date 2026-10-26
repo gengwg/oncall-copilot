@@ -68,14 +68,17 @@ EOF
 cat >> "$TMP/bin/kubectl" <<'EOF'
 case "$*" in
   *" get node "*) [ "${STUB_NODE_HEALTHY:-0}" = "1" ] && {
-      echo '{"spec":{},"status":{"conditions":[{"type":"Ready","status":"True","reason":"KubeletReady"},{"type":"MemoryPressure","status":"False"},{"type":"XidCritical","status":"False","lastTransitionTime":"2026-10-25T03:20:00Z"}]}}'
+      echo '{"spec":{},"status":{"conditions":[{"type":"Ready","status":"True","reason":"KubeletReady"},{"type":"MemoryPressure","status":"False"},{"type":"CheckFsPassed","status":"True","message":"filesystem check OK"},{"type":"XidCritical","status":"False","lastTransitionTime":"2026-10-25T03:20:00Z"}]}}'
       exit 0; }
     cat <<'JSON'
 {"spec":{"unschedulable":true,"taints":[{"key":"node.kubernetes.io/unschedulable","effect":"NoSchedule"}]},
  "status":{"conditions":[
   {"type":"Ready","status":"True","reason":"KubeletReady"},
   {"type":"MemoryPressure","status":"False","reason":"KubeletHasSufficientMemory"},
-  {"type":"XidCritical","status":"True","reason":"Xid79","message":"NVRM: Xid (PCI:0000:1b:00): 79, GPU has fallen off the bus."}]}}
+  {"type":"XidCritical","status":"True","reason":"Xid79","message":"NVRM: Xid (PCI:0000:1b:00): 79, GPU has fallen off the bus."},
+  {"type":"CheckFsPassed","status":"True","message":"filesystem check OK"},
+  {"type":"NodeInitCompleted","status":"True","message":"node-init completed"},
+  {"type":"CheckIbHealthPassed","status":"False","message":"ib: 2/4 healthy 100G"}]}}
 JSON
   ;;
   *" get events "*) echo '{"items":[{"lastTimestamp":"2026-10-25T03:01:00Z","reason":"NodeNotSchedulable","message":"Node gpu-node-7 status is now: NodeNotSchedulable"}]}' ;;
@@ -371,6 +374,13 @@ case "$prompt" in
   *MemoryPressure*) bad "node alert -> healthy conditions left out" "MemoryPressure=False reached the prompt" ;;
   *) ok "node alert -> healthy conditions left out" ;;
 esac
+# Health-check conditions read the other way round: Passed=True is healthy and
+# would otherwise bury the evidence; Passed=False is a failed check.
+case "$prompt" in
+  *CheckFsPassed*|*NodeInitCompleted*) bad "node alert -> passing health checks left out" "a healthy True check reached the prompt" ;;
+  *) ok "node alert -> passing health checks left out" ;;
+esac
+check "node alert -> failed health check shown" "condition CheckIbHealthPassed=False: ib: 2/4 healthy 100G" "$prompt"
 check "node alert -> uses the cluster's read-only kubeconfig" "--kubeconfig $TMP/kc/c1.kubeconfig" "$(cat "$TMP/kubectl.args")"
 case "$ERR" in
   *"no evidence collected"*) bad "node evidence counts as evidence" "warned although node evidence was collected" ;;
