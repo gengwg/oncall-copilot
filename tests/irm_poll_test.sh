@@ -76,6 +76,7 @@ a=\$(printf '%s' "\$1" | jq -r .alertname)
 case "\$a" in NoBrief*) exit 0 ;; esac
 printf 'BRIEF %s on %s\n' "\$a" "\$(printf '%s' "\$1" | jq -r .labels.cluster)"
 case "\$a" in ModelDown*) echo "Degraded: model call failed" ;; esac
+case "\$a" in DcDraft*) printf 'Verdict: hold - node is cordoned\nFault: real - Xid 79 in dmesg\nFailure mode: hardware (related: none)\nDC draft: $TMP/drafts/x.md\n' ;; esac
 EOF
 chmod +x "$TMP/investigate.sh"
 : > "$TMP/investigated"
@@ -208,6 +209,26 @@ set_groups "$(group D5 305 new NoBriefX c14 critical)" "$(group D4 304 new Model
 run_poll HEARTBEAT_URL="$HB"
 [ "$(beats)" = 3 ] && ok "no brief after a degraded one -> no heartbeat" || bad "no brief after a degraded one -> no heartbeat" "beats=$(beats)"
 check "no brief -> reason given" "produced no brief" "$ERR"
+
+# 12. With OUTBOX_DIR set, every brief becomes one JSON event the Slack agent
+#     can read; skipped groups get none, and no half-written file is left.
+OB="$TMP/outbox"
+[ -e "$TMP/state/outbox" ] && bad "OUTBOX_DIR unset -> no outbox written" "found $TMP/state/outbox" || ok "OUTBOX_DIR unset -> no outbox written"
+set_groups "$(group E2 402 resolved ProbeLoss c20 warning)" "$(group E1 401 new DcDraftXid c20 critical gpu-7)" "$(group D5 305 new NoBriefX c14 critical)"
+run_poll OUTBOX_DIR="$OB"
+[ -f "$OB/E1.json" ] && ok "brief -> event file named by IRM id" || bad "brief -> event file named by IRM id" "$(ls "$OB" 2>&1)"
+[ -e "$OB/E2.json" ] && bad "skipped group -> no event" "E2.json exists" || ok "skipped group -> no event"
+ev=$(cat "$OB/E1.json" 2>/dev/null)
+jq -e '.irm_id == "E1" and .irm_number == 401 and .alertname == "DcDraftXid" and .cluster == "c20" and .node == "gpu-7" and .severity == "critical"' <<< "$ev" >/dev/null && ok "event -> identity fields" || bad "event -> identity fields" "$ev"
+jq -e '.fault == "real" and .verdict == "hold" and .failure_mode == "hardware" and .degraded == null' <<< "$ev" >/dev/null && ok "event -> verdict fields from the brief" || bad "event -> verdict fields from the brief" "$ev"
+jq -e --arg d "$TMP/drafts/x.md" '.dc_draft == $d and (.brief | contains("BRIEF DcDraftXid")) and .starts_at == "2026-10-25T09:04:00Z" and (.irm_url | startswith("https://slack.example"))' <<< "$ev" >/dev/null && ok "event -> draft path, brief, start time, link" || bad "event -> draft path, brief, start time, link" "$ev"
+[ -z "$(ls "$OB"/*.tmp 2>/dev/null)" ] && ok "event -> no temp file left" || bad "event -> no temp file left" "$(ls "$OB")"
+set_groups "$(group E3 403 new ModelDownE c21 critical)" "$(group E1 401 new DcDraftXid c20 critical gpu-7)"
+run_poll OUTBOX_DIR="$OB"
+jq -e '.degraded == "model call failed" and .fault == "unknown" and .dc_draft == null' "$OB/E3.json" >/dev/null && ok "degraded brief -> event says why, verdicts unknown" || bad "degraded brief -> event says why, verdicts unknown" "$(cat "$OB/E3.json" 2>&1)"
+set_groups "$(group E4 404 new NoBriefY c22 critical)" "$(group E3 403 new ModelDownE c21 critical)"
+run_poll OUTBOX_DIR="$OB"
+jq -e '.degraded == "investigation produced no brief" and .brief == ""' "$OB/E4.json" >/dev/null && ok "no brief -> event still written, marked degraded" || bad "no brief -> event still written, marked degraded" "$(cat "$OB/E4.json" 2>&1)"
 
 echo
 echo "$PASS passed, $FAIL failed"

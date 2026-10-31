@@ -12,7 +12,8 @@
 #      STORM_WINDOW_S (default 1800), STORM_MAX (default 5),
 #      SEVERITIES (default "critical warning"),
 #      HEARTBEAT_URL (optional IRM heartbeat endpoint; holds a secret),
-#      DEGRADED_HOLD_AFTER (default 2 degraded briefs in a row).
+#      DEGRADED_HOLD_AFTER (default 2 degraded briefs in a row),
+#      OUTBOX_DIR (optional; one JSON event per brief for the Slack agent).
 # Usage: irm-poll.sh   (run every 30-60s from a timer)
 set -uo pipefail
 
@@ -24,6 +25,7 @@ STORM_WINDOW_S="${STORM_WINDOW_S:-1800}"
 STORM_MAX="${STORM_MAX:-5}"
 SEVERITIES="${SEVERITIES:-critical warning}"
 DEGRADED_HOLD_AFTER="${DEGRADED_HOLD_AFTER:-2}"
+OUTBOX_DIR="${OUTBOX_DIR:-}"
 SEEN="$STATE_DIR/seen"
 STORM="$STATE_DIR/storm"
 DEGRADED="$STATE_DIR/degraded"
@@ -74,6 +76,26 @@ fi
 
 log() { printf '=== %s IRM #%s %s\n%s\n\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2" "$3" >> "$SHADOW_LOG"; }
 skip() { printf -- '--- %s IRM #%s %s (%s)\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$3" "$2" >> "$SHADOW_LOG"; }
+# One event per brief for the Slack agent, which runs as another user and only
+# reads here. The verdict fields are lifted from the brief's fixed lines; a
+# brief without them reads as unknown. Written whole, then renamed, so a
+# half-written file is never picked up. Skipped groups get no event.
+emit_event() { # emit_event <id> <alert-line-json> <brief> <degraded-reason>
+  [ -n "$OUTBOX_DIR" ] || return 0
+  mkdir -p "$OUTBOX_DIR"
+  local f="$OUTBOX_DIR/$1.json"
+  printf '%s' "$2" | jq --arg id "$1" --arg brief "$3" --arg degraded "$4" \
+      --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
+    def field($p): ($brief | split("\n") | map(select(startswith($p))) | last // "" | ltrimstr($p));
+    def word($s): if $s == "" then "unknown" else ($s | split(" ")[0] | ascii_downcase) end;
+    {irm_id: $id, irm_number: .irm_number, irm_url: .irm_url, alertname, severity,
+     cluster: (.labels.cluster // ""), node: (.labels.node // ""), starts_at,
+     fault: word(field("Fault: ")), verdict: word(field("Verdict: ")),
+     failure_mode: word(field("Failure mode: ")),
+     degraded: (if $degraded == "" then null else $degraded end),
+     dc_draft: (field("DC draft: ") | if . == "" then null else . end),
+     brief: $brief, ts: $ts}' > "$f.tmp" && mv "$f.tmp" "$f"
+}
 
 now=$(date +%s)
 # Oldest first, so storm suppression keeps the first group of a burst.
@@ -126,6 +148,7 @@ for g in "${groups[@]}"; do
   log "$num" "$id" "${brief:-investigation produced no brief (see $STATE_DIR/investigate.err)}"
   reason=$(printf '%s\n' "$brief" | sed -n 's/^Degraded: //p' | head -1)
   [ -z "$brief" ] && reason="investigation produced no brief"
+  emit_event "$id" "$line" "$brief" "$reason"
   if [ -n "$reason" ]; then
     n=$(cat "$STREAK" 2>/dev/null)
     case "$n" in ''|*[!0-9]*) n=0 ;; esac
@@ -144,5 +167,6 @@ done
 # Bound the state files.
 tail -n 2000 "$SEEN" > "$SEEN.tmp" && mv "$SEEN.tmp" "$SEEN"
 [ -f "$STORM" ] && tail -n 500 "$STORM" > "$STORM.tmp" && mv "$STORM.tmp" "$STORM"
+[ -d "$OUTBOX_DIR" ] && find "$OUTBOX_DIR" -maxdepth 1 -name '*.json' -mtime +7 -delete
 heartbeat
 exit 0

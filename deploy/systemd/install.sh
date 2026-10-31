@@ -11,6 +11,12 @@ sudo -H -u "$U" git -C "$H/oncall-copilot" pull -q --ff-only
 sudo -H -u "$U" mkdir -p "$H/ws/memory/incidents" "$H/ws/memory/runbooks"
 sudo -H -u "$U" ln -sfn "$H/oncall-copilot/skills" "$H/ws/skills"
 
+# The outbox is where the Slack agent (deploy/systemd/user/, run by a person's
+# account) reads one event per brief. Group-readable, never writable by it.
+AGENT_USER="${AGENT_USER:-${SUDO_USER:-$USER}}"
+sudo install -d -m 750 -o "$U" -g "$U" "$H/outbox"
+id -nG "$AGENT_USER" | tr ' ' '\n' | grep -qx "$U" || sudo usermod -aG "$U" "$AGENT_USER"
+
 sudo install -m 644 "$SRC/oncall-copilot-poll.service" "$SRC/oncall-copilot-poll.timer" /etc/systemd/system/
 sudo systemctl daemon-reload
 
