@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/gengwg/oncall-copilot/slack-agent/internal/event"
 )
@@ -15,13 +16,17 @@ import (
 // Scan returns every complete event in dir, oldest first. Files still being
 // written end in .tmp and are skipped; an unreadable file is reported and skipped.
 func Scan(dir string) ([]event.Event, error) {
-	names, err := filepath.Glob(filepath.Join(dir, "*.json"))
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("outbox: %w", err)
 	}
 	var out []event.Event
 	var bad []string
-	for _, n := range names {
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		n := filepath.Join(dir, e.Name())
 		b, err := os.ReadFile(n)
 		if err != nil {
 			bad = append(bad, filepath.Base(n))

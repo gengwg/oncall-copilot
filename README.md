@@ -75,7 +75,8 @@ Grafana IRM alert groups --poll (read-only SA token)--> alert-relay/irm-poll.sh
      -> ack in IRM only on the owner's own shift, only for a `hold` verdict,
         only after the DM posted; everything else keeps escalating
      -> real hardware faults: run the /file-dc-request skill headless (draft only)
-     -> owner replies: file, ignore, ack, unack, status; or `file #1234` / `file <card link>`
+     -> owner replies: file, sent, ignore, ack, unack, status; or `file #1234` / `file <card link>`
+     -> pings an IRM heartbeat after each successful scan (optional)
 ```
 
 Why it is shaped this way, and why acks are so narrow, is in
@@ -99,7 +100,7 @@ Why it is shaped this way, and why acks are so narrow, is in
   --trusted-private-host 172.18.0.1 --yes`; NemoClaw v0.0.123+ refuses RFC1918
   endpoints without that explicit trust flag
 - `slack-agent/` — the real-on-call Slack side (Go): reads the poller's outbox,
-  DMs each brief to one person, lets them steer by replying (`file`, `ignore`,
+  DMs each brief to one person, lets them steer by replying (`file`, `sent`, `ignore`,
   `ack`, `unack`, `status`, or `file #5474` / `file <alert link>` for any alert), acks `hold`-verdict pages during that person's own
   IRM shift once the brief has reached them (a `page` verdict keeps escalating), and drafts DC hardware requests through the
   metarepo `/file-dc-request` skill (`deploy/systemd/user/`, `deploy/systemd/install-slack-agent.sh`)

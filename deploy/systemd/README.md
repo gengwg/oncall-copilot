@@ -10,6 +10,43 @@ Two services, two users, one host.
 | Installer | `install.sh` (sudo) | `install-slack-agent.sh` (no sudo) |
 | Writes | the outbox, briefs log, DC drafts | IRM acknowledge/unacknowledge only, Slack DMs, its own state dir |
 
+## Prerequisites (Phase 0, once per fleet)
+
+Everything the poller reads is read-only, and each credential exists before
+any unit is installed:
+
+1. **Grafana service account**, Viewer role, with a token. It reads IRM alert
+   groups and `final_shifts` through the OnCall API host (`Authorization: Bearer`
+   plus `X-Grafana-URL`) and Prometheus through the datasource proxy.
+2. **A read-only ServiceAccount on every in-service cluster** (get/list on
+   nodes, pods, events, namespaces) with a long-lived token written to
+   `<KUBECONFIG_DIR>/<cluster>.kubeconfig`. The manifest and the minting script
+   are not in this repository yet; they live with the fleet's infrastructure
+   code. Never the admin kubeconfigs.
+3. **The poller's env file** at `/var/lib/oncall-copilot/.config/oncall-copilot/env`
+   (0600, owned by `oncall-copilot`): `IRM_API_URL`, `GRAFANA_URL`,
+   `GRAFANA_TOKEN`, `PROMETHEUS_TOKEN=$GRAFANA_TOKEN`, `KUBECONFIG_DIR`,
+   `INFERENCE_URL`, `NEBIUS_API_KEY`, `MODEL`, optionally `DC_DRAFT_DIR` and
+   `DC_PROVIDERS` (a private TSV: cluster, site, channel, channel id, ticket
+   note) and `HEARTBEAT_URL`. `OUTBOX_DIR` is set by the unit.
+4. **The system user**: `oncall-copilot`, home `/var/lib/oncall-copilot`,
+   nologin, no sudo, with a clone of this repository at
+   `/var/lib/oncall-copilot/oncall-copilot`.
+5. **Exit test** before enabling the timer: one hand-run `irm-poll.sh` on a
+   fresh state dir only records existing groups; the next run with a new group
+   writes a brief with non-empty node evidence to `briefs.log`.
+
+## Heartbeats
+
+Both services ping an IRM heartbeat so a dead one pages someone. Each needs
+its own IRM integration: IRM > Integrations > New integration > Webhook, name
+it, enable Heartbeat with a 30 minute interval, and copy the heartbeat URL into
+the service's env file as `HEARTBEAT_URL`. Route the integration to a quiet
+channel with no escalation chain unless you want the on-call woken by it.
+The poller pings after each successful poll and holds the ping after two
+degraded briefs in a row; the agent pings after each scan that read the outbox.
+The URL carries a secret and is never logged.
+
 ## Order
 
 1. Merge to main first. `install.sh` pulls main into the poller's clone and then
