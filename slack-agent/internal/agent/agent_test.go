@@ -484,3 +484,17 @@ func TestTopLevelCommandWithAlertReference(t *testing.T) {
 		t.Fatalf("bare file at top level is help: %q", h.poster.lastReply())
 	}
 }
+
+func TestSentReplyMarksTheLedger(t *testing.T) {
+	h := newHarness(t, myShift)
+	h.put(withDraft(ev("G1", 1, "critical", now)))
+	h.tick()
+	h.a.HandleInbound(context.Background(), slackio.Inbound{ThreadTS: "ts1", Text: "sent"})
+	if h.rec("G1").DCStatus != "sent" || !strings.Contains(h.poster.lastReply(), "sent.") {
+		t.Fatalf("rec=%+v reply=%q", h.rec("G1"), h.poster.lastReply())
+	}
+	e, ok := h.a.Ledger.Recent("c1", "n-G1", now.Add(-time.Hour))
+	if !ok || e.Status != "sent" {
+		t.Fatalf("ledger: %+v ok=%v", e, ok)
+	}
+}

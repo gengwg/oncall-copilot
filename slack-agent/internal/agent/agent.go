@@ -396,7 +396,7 @@ func deref(s *string) string {
 
 // --- Replies from the owner.
 
-const help = "Reply in a brief's thread with `file` (draft the DC request now), `ignore` (never for this node for 14 days), `ack`, `unack`; or send `file #5474` / `file <alert link>` (also `ack`, `unack`, `ignore`) as a new message for any alert; `status` anywhere."
+const help = "Reply in a brief's thread with `file` (draft the DC request now), `sent` (you sent the draft), `ignore` (never for this node for 14 days), `ack`, `unack`; or send `file #5474` / `file <alert link>` (also `sent`, `ack`, `unack`, `ignore`) as a new message for any alert; `status` anywhere."
 
 // slackLink strips Slack's <url|label> wrapping from a pasted link.
 var slackLink = regexp.MustCompile(`<([^|>]+)(?:\|[^>]*)?>`)
@@ -420,7 +420,7 @@ func (a *Agent) HandleInbound(ctx context.Context, in slackio.Inbound) {
 	threadTS := in.ThreadTS
 	var rec *event.Record
 	switch {
-	case threadTS == "" && ref != "" && (cmd == "file" || cmd == "ignore" || cmd == "ack" || cmd == "unack"):
+	case threadTS == "" && ref != "" && (cmd == "file" || cmd == "sent" || cmd == "ignore" || cmd == "ack" || cmd == "unack"):
 		// A command about any alert: attach the group to this message's thread.
 		g, err := a.IRM.FindGroup(ctx, ref)
 		if err != nil {
@@ -468,6 +468,14 @@ func (a *Agent) HandleInbound(ctx context.Context, in slackio.Inbound) {
 		save(rec)
 		a.enqueue(dcJob{id: rec.IRMID, force: true})
 		reply(in.ThreadTS, fmt.Sprintf("Drafting the DC request for %s/%s now; this takes a few minutes.", ev.Cluster, ev.Node))
+	case "sent":
+		if err := a.Ledger.Append(ledger.Entry{TS: a.now(), Cluster: ev.Cluster, Node: ev.Node, IRMID: ev.IRMID, Status: "sent"}); err != nil {
+			reply(in.ThreadTS, "Could not record it as sent: "+err.Error())
+			return
+		}
+		rec.DCStatus = "sent"
+		save(rec)
+		reply(in.ThreadTS, fmt.Sprintf("Noted: DC request for %s/%s sent. No new draft for this node for 14 days unless you reply `file`.", ev.Cluster, ev.Node))
 	case "ignore":
 		if err := a.Ledger.Append(ledger.Entry{TS: a.now(), Cluster: ev.Cluster, Node: ev.Node, IRMID: ev.IRMID, Status: "ignored"}); err != nil {
 			reply(in.ThreadTS, "Could not record the ignore: "+err.Error())

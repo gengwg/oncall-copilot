@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -91,12 +92,33 @@ func main() {
 		}
 	}()
 
-	lg.Printf("started: outbox %s, dry run %v, every %s", cfg.OutboxDir, cfg.AckDryRun, cfg.ScanInterval)
+	lg.Printf("started: outbox %s, dry run %v, every %s, heartbeat %v", cfg.OutboxDir, cfg.AckDryRun, cfg.ScanInterval, cfg.HeartbeatURL != "")
+	// Pinged only after a scan that read the outbox, so IRM alerts when the
+	// agent dies, loses the outbox, or stalls. The URL carries a secret: never logged.
+	heartbeat := func() {
+		if cfg.HeartbeatURL == "" {
+			return
+		}
+		hctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		req, _ := http.NewRequestWithContext(hctx, http.MethodGet, cfg.HeartbeatURL, nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			lg.Printf("heartbeat ping failed: %v", err)
+			return
+		}
+		resp.Body.Close()
+		if resp.StatusCode >= 300 {
+			lg.Printf("heartbeat ping: HTTP %d", resp.StatusCode)
+		}
+	}
 	t := time.NewTicker(cfg.ScanInterval)
 	defer t.Stop()
 	for {
 		if err := a.Tick(ctx); err != nil {
 			lg.Printf("tick: %v", err)
+		} else {
+			heartbeat()
 		}
 		select {
 		case <-ctx.Done():

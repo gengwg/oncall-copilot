@@ -31,6 +31,7 @@ type Config struct {
 	AckDryRun    bool
 	CollapseMax  int
 	ScanInterval time.Duration
+	HeartbeatURL string // optional IRM heartbeat; pinged after each successful scan
 }
 
 func Load(getenv func(string) string) (Config, error) {
@@ -64,6 +65,7 @@ func Load(getenv func(string) string) (Config, error) {
 		ClaudeModel:      opt("CLAUDE_MODEL", ""),
 		MetarepoDir:      req("METAREPO_DIR"),
 		AckDryRun:        opt("ACK_DRY_RUN", "1") != "0",
+		HeartbeatURL:     opt("HEARTBEAT_URL", ""),
 		CollapseMax:      6,
 		ScanInterval:     10 * time.Second,
 	}
