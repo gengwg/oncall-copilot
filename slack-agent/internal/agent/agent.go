@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -56,6 +57,12 @@ type Agent struct {
 	CollapseMax int
 	Now         func() time.Time
 	Log         *log.Logger
+	// Off-shift briefs are not DMed; they wait for one digest per day at
+	// DigestAt (HH:MM in DigestTZ). DigestMarker is the file holding the date
+	// of the last digest. Empty DigestAt disables deferral: every brief is DMed.
+	DigestAt     string
+	DigestTZ     *time.Location
+	DigestMarker string
 
 	dcJobs chan dcJob
 }
@@ -91,8 +98,26 @@ func (a *Agent) Tick(ctx context.Context) error {
 		switch {
 		case rec == nil:
 			fresh = append(fresh, ev)
-		case !rec.PostFailed && (rec.SlackTS == "" || !rec.AckDecided || a.wantsDC(rec)):
+		case !rec.PostFailed && !rec.Deferred && (rec.SlackTS == "" || !rec.AckDecided || a.wantsDC(rec)):
 			pending = append(pending, ev)
+		}
+	}
+	if a.DigestAt != "" {
+		if _, mine := a.Shifts.Mine(a.now()); !mine {
+			// Someone else's shift: hold the briefs for the digest. Nothing is
+			// acked for them anyway, and the on-call is paged by IRM as usual.
+			for _, ev := range fresh {
+				rec := &event.Record{IRMID: ev.IRMID, Event: ev, Deferred: true, AckDecided: true,
+					DeferredAt: a.now().UTC().Format(time.RFC3339),
+					AckNote:    "not acked: not your shift; held for the morning digest"}
+				if err := a.Store.Save(rec); err != nil {
+					return err
+				}
+			}
+			fresh = nil
+		}
+		if err := a.digest(ctx); err != nil {
+			a.logf("digest: %v", err)
 		}
 	}
 	if a.CollapseMax > 0 && len(fresh) > 0 {
@@ -117,6 +142,67 @@ func (a *Agent) Tick(ctx context.Context) error {
 
 func (a *Agent) wantsDC(rec *event.Record) bool {
 	return rec.Event.DCDraft != nil && rec.DCStatus == ""
+}
+
+// digest posts, once per day after DigestAt, everything deferred since the
+// last digest. Quiet days post nothing; the heartbeat says the agent is alive.
+func (a *Agent) digest(ctx context.Context) error {
+	now := a.now()
+	loc := a.DigestTZ
+	if loc == nil {
+		loc = time.UTC
+	}
+	local := now.In(loc)
+	at, err := time.ParseInLocation("15:04", a.DigestAt, loc)
+	if err != nil {
+		return fmt.Errorf("DigestAt %q: %w", a.DigestAt, err)
+	}
+	due := time.Date(local.Year(), local.Month(), local.Day(), at.Hour(), at.Minute(), 0, 0, loc)
+	if local.Before(due) {
+		return nil
+	}
+	today := local.Format("2006-01-02")
+	if b, err := os.ReadFile(a.DigestMarker); err == nil && strings.TrimSpace(string(b)) == today {
+		return nil
+	}
+	all, err := a.Store.Undigested()
+	if err != nil {
+		return err
+	}
+	// Only what was deferred before today's digest time. Anything held after
+	// it belongs to tomorrow's, so a late start never flushes the day's briefs.
+	var recs []event.Record
+	for _, r := range all {
+		t, err := time.Parse(time.RFC3339, r.DeferredAt)
+		if err == nil && t.Before(due) {
+			recs = append(recs, r)
+		}
+	}
+	if len(recs) > 0 {
+		var b strings.Builder
+		fmt.Fprintf(&b, "*Overnight digest: %d brief(s) on other shifts, none acked by me.*\n", len(recs))
+		for _, r := range recs {
+			ev := r.Event
+			fmt.Fprintf(&b, "• IRM #%d %s (%s) %s/%s · verdict %s · fault %s", ev.IRMNumber, ev.Alertname, ev.Severity, orDash(ev.Cluster), orDash(ev.Node), ev.Verdict, ev.Fault)
+			if ev.DCDraft != nil {
+				fmt.Fprintf(&b, " · DC draft ready: reply `file #%d`", ev.IRMNumber)
+			}
+			if ev.IRMURL != "" {
+				b.WriteString(" · " + ev.IRMURL)
+			}
+			b.WriteString("\n")
+		}
+		if _, err := a.Poster.PostDM(ctx, b.String()); err != nil {
+			return fmt.Errorf("post: %w", err)
+		}
+		for i := range recs {
+			recs[i].Digested = true
+			if err := a.Store.Save(&recs[i]); err != nil {
+				return err
+			}
+		}
+	}
+	return os.WriteFile(a.DigestMarker, []byte(today+"\n"), 0o600)
 }
 
 // collapse posts one summary for a burst and marks each as reported but not
@@ -549,7 +635,7 @@ func (a *Agent) status(ctx context.Context) string {
 	}
 	evs, _ := outbox.Scan(a.Outbox)
 	recs, _ := a.Store.All()
-	acked, dc := 0, 0
+	acked, dc, held := 0, 0, 0
 	for _, r := range recs {
 		if r.AckedAt != "" {
 			acked++
@@ -557,8 +643,11 @@ func (a *Agent) status(ctx context.Context) string {
 		if r.DCStatus != "" && r.DCStatus != "queued" {
 			dc++
 		}
+		if r.Deferred && !r.Digested {
+			held++
+		}
 	}
-	fmt.Fprintf(&b, "Outbox: %d events, %d records, %d acked by me, %d DC decisions. Dry run: %v.", len(evs), len(recs), acked, dc, a.DryRun)
+	fmt.Fprintf(&b, "Outbox: %d events, %d records, %d acked by me, %d DC decisions, %d held for the next digest. Dry run: %v.", len(evs), len(recs), acked, dc, held, a.DryRun)
 	return b.String()
 }
 

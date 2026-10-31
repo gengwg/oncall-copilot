@@ -32,6 +32,8 @@ type Config struct {
 	CollapseMax  int
 	ScanInterval time.Duration
 	HeartbeatURL string // optional IRM heartbeat; pinged after each successful scan
+	DigestAt     string // HH:MM in DigestTZ; "" DMs every brief regardless of shift
+	DigestTZ     string
 }
 
 func Load(getenv func(string) string) (Config, error) {
@@ -66,6 +68,8 @@ func Load(getenv func(string) string) (Config, error) {
 		MetarepoDir:      req("METAREPO_DIR"),
 		AckDryRun:        opt("ACK_DRY_RUN", "1") != "0",
 		HeartbeatURL:     opt("HEARTBEAT_URL", ""),
+		DigestAt:         opt("DIGEST_AT", "08:05"),
+		DigestTZ:         opt("DIGEST_TZ", "America/Los_Angeles"),
 		CollapseMax:      6,
 		ScanInterval:     10 * time.Second,
 	}
@@ -82,6 +86,16 @@ func Load(getenv func(string) string) (Config, error) {
 			return c, fmt.Errorf("SCAN_INTERVAL: %w", err)
 		}
 		c.ScanInterval = d
+	}
+	if c.DigestAt != "" && c.DigestAt != "off" {
+		if _, err := time.Parse("15:04", c.DigestAt); err != nil {
+			return c, fmt.Errorf("DIGEST_AT: %w", err)
+		}
+		if _, err := time.LoadLocation(c.DigestTZ); err != nil {
+			return c, fmt.Errorf("DIGEST_TZ: %w", err)
+		}
+	} else {
+		c.DigestAt = ""
 	}
 	if len(missing) > 0 {
 		return c, fmt.Errorf("missing env: %s", strings.Join(missing, ", "))
