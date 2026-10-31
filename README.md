@@ -76,8 +76,8 @@ demo-app (/chaos) -> Prometheus alert -> Alertmanager --webhook--> alert-relay
   endpoints without that explicit trust flag
 - `slack-agent/` — the real-on-call Slack side (Go): reads the poller's outbox,
   DMs each brief to one person, lets them steer by replying (`file`, `ignore`,
-  `ack`, `unack`, `status`), acks pages during that person's own IRM shift once
-  the brief has reached them, and drafts DC hardware requests through the
+  `ack`, `unack`, `status`), acks `hold`-verdict pages during that person's own
+  IRM shift once the brief has reached them (a `page` verdict keeps escalating), and drafts DC hardware requests through the
   metarepo `/file-dc-request` skill (`deploy/systemd/user/`, `deploy/systemd/install-slack-agent.sh`)
 - `tests/e2e/` — chaos-scenario end-to-end harness
 - `spike/` — Phase 0 verification (Token Factory, NemoClaw onboarding)

@@ -230,6 +230,11 @@ func (a *Agent) ackGate(ctx context.Context, ev event.Event, rec *event.Record) 
 	if ev.Degraded != nil {
 		return ackNo, "not acked: brief degraded (" + *ev.Degraded + ")"
 	}
+	// An ack a minute or two in cuts the owner's own push, SMS and call steps.
+	// Only a brief that says this can wait earns that; a page keeps escalating.
+	if ev.Verdict != "hold" {
+		return ackNo, "not acked: verdict " + ev.Verdict + ", IRM keeps paging you"
+	}
 	now := a.now()
 	mine, ok := a.Shifts.Mine(now)
 	if !ok {
