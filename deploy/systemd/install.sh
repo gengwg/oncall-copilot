@@ -7,7 +7,13 @@ U=oncall-copilot
 H=/var/lib/oncall-copilot
 SRC="$H/oncall-copilot/deploy/systemd"
 
-sudo -H -u "$U" git -C "$H/oncall-copilot" pull -q --ff-only
+# bash keeps reading the file it opened, so a pull that replaces this script
+# would leave the old steps running with the new units. Pull, then re-run the
+# fresh copy once.
+if [ "${1:-}" != "--pulled" ]; then
+  sudo -H -u "$U" git -C "$H/oncall-copilot" pull -q --ff-only
+  exec bash "$SRC/install.sh" --pulled
+fi
 sudo -H -u "$U" mkdir -p "$H/ws/memory/incidents" "$H/ws/memory/runbooks"
 sudo -H -u "$U" ln -sfn "$H/oncall-copilot/skills" "$H/ws/skills"
 
