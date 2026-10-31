@@ -52,6 +52,14 @@ type fakeIRM struct {
 	groupErr error
 	acks     []string
 	unacks   []string
+	findable map[string]irm.Group // ref -> group
+}
+
+func (f *fakeIRM) FindGroup(_ context.Context, ref string) (irm.Group, error) {
+	if g, ok := f.findable[ref]; ok {
+		return g, nil
+	}
+	return irm.Group{}, irm.ErrNotFound
 }
 
 func (f *fakeIRM) Group(_ context.Context, id string) (irm.Group, error) {
@@ -423,5 +431,56 @@ func TestAckAndUnackReplies(t *testing.T) {
 	h.a.HandleInbound(ctx, slackio.Inbound{TS: "t9", Text: "what?"})
 	if !strings.Contains(h.poster.lastReply(), "Reply in a brief's thread") {
 		t.Fatalf("help: %q", h.poster.lastReply())
+	}
+}
+
+func TestTopLevelCommandWithAlertReference(t *testing.T) {
+	h := newHarness(t, theirShift)
+	var g irm.Group
+	g.ID = "X9"
+	g.Number = 5474
+	g.State = "firing"
+	g.Permalinks.Slack = "https://aranyaglobal.slack.com/archives/C0A9WCF9S56/p1761900000000001"
+	g.LastAlert.Payload.Alerts = append(g.LastAlert.Payload.Alerts, struct {
+		Labels   map[string]string `json:"labels"`
+		StartsAt string            `json:"startsAt"`
+	}{Labels: map[string]string{"alertname": "GPU Xid Critical", "cluster": "adapted-deer", "node": "expert-lizard", "severity": "critical"}, StartsAt: "2026-10-30T20:00:00Z"})
+	h.irm.findable = map[string]irm.Group{"#5474": g, "https://aranyaglobal.slack.com/archives/C0A9WCF9S56/p1761900000000001": g}
+	ctx := context.Background()
+
+	// Slack wraps pasted links in <...>; the command may come first or last.
+	h.a.HandleInbound(ctx, slackio.Inbound{TS: "u1", Text: "file <https://aranyaglobal.slack.com/archives/C0A9WCF9S56/p1761900000000001>"})
+	h.a.DrainDC(ctx)
+	if len(h.runner.calls) != 1 || h.runner.calls[0] != "expert-lizard" {
+		t.Fatalf("runner calls: %v", h.runner.calls)
+	}
+	rec := h.rec("X9")
+	if rec.SlackTS != "u1" || rec.DCStatus != "drafted" || rec.AckedAt != "" {
+		t.Fatalf("record: %+v", rec)
+	}
+	if !strings.HasPrefix(h.poster.lastReply(), "u1: DC request drafted for adapted-deer/expert-lizard") {
+		t.Fatalf("reply: %q", h.poster.lastReply())
+	}
+	if len(h.irm.acks) != 0 {
+		t.Fatal("attaching by hand must not ack")
+	}
+
+	// Follow-up commands work in that thread, and by number as a new message.
+	h.a.HandleInbound(ctx, slackio.Inbound{ThreadTS: "u1", Text: "ack"})
+	if len(h.irm.acks) != 1 || h.irm.acks[0] != "X9" {
+		t.Fatalf("acks: %v", h.irm.acks)
+	}
+	h.a.HandleInbound(ctx, slackio.Inbound{TS: "u2", Text: "unack #5474"})
+	if len(h.irm.unacks) != 1 {
+		t.Fatalf("unacks: %v", h.irm.unacks)
+	}
+
+	h.a.HandleInbound(ctx, slackio.Inbound{TS: "u3", Text: "file #9999"})
+	if !strings.Contains(h.poster.lastReply(), "u3: Could not find that alert") || len(h.runner.calls) != 1 {
+		t.Fatalf("unknown ref: %q calls=%v", h.poster.lastReply(), h.runner.calls)
+	}
+	h.a.HandleInbound(ctx, slackio.Inbound{TS: "u4", Text: "file"})
+	if !strings.Contains(h.poster.lastReply(), "Reply in a brief's thread") {
+		t.Fatalf("bare file at top level is help: %q", h.poster.lastReply())
 	}
 }

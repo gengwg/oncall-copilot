@@ -23,6 +23,9 @@ import (
 // ErrNotAllowed is returned by the transport for any write outside the allowlist.
 var ErrNotAllowed = errors.New("irm: request not in the write allowlist")
 
+// ErrNotFound means no recent alert group matched the reference.
+var ErrNotFound = errors.New("irm: alert group not found")
+
 // ErrAlreadyAcked means the group was acknowledged before we got to it. Callers
 // treat it as success: the escalation is already stopped and someone saw it.
 var ErrAlreadyAcked = errors.New("irm: already acknowledged")
@@ -118,7 +121,80 @@ type Group struct {
 		Slack string `json:"slack"`
 		Web   string `json:"web"`
 	} `json:"permalinks"`
+	LastAlert struct {
+		Payload struct {
+			Alerts []struct {
+				Labels   map[string]string `json:"labels"`
+				StartsAt string            `json:"startsAt"`
+			} `json:"alerts"`
+		} `json:"payload"`
+	} `json:"last_alert"`
 }
+
+// Labels returns the first alert's labels, or an empty map.
+func (g Group) Labels() map[string]string {
+	if len(g.LastAlert.Payload.Alerts) == 0 {
+		return map[string]string{}
+	}
+	return g.LastAlert.Payload.Alerts[0].Labels
+}
+
+// StartsAt returns the first alert's firing time, or "".
+func (g Group) StartsAt() string {
+	if len(g.LastAlert.Payload.Alerts) == 0 {
+		return ""
+	}
+	return g.LastAlert.Payload.Alerts[0].StartsAt
+}
+
+var (
+	refNumber    = regexp.MustCompile(`^#?(\d{1,7})$`)
+	refPermalink = regexp.MustCompile(`archives/([A-Z0-9]+)/p(\d+)`)
+)
+
+// FindGroup resolves "#5474", "5474" or a Slack permalink to the alert's card
+// by paging through recent alert groups, newest first. The list API has no
+// filter for either, so this stops after findPages pages.
+func (c *Client) FindGroup(ctx context.Context, ref string) (Group, error) {
+	ref = strings.TrimSpace(ref)
+	var match func(Group) bool
+	if m := refNumber.FindStringSubmatch(ref); m != nil {
+		n := m[1]
+		match = func(g Group) bool { return fmt.Sprint(g.Number) == n }
+	} else if m := refPermalink.FindStringSubmatch(ref); m != nil {
+		frag := "archives/" + m[1] + "/p" + m[2]
+		match = func(g Group) bool { return strings.Contains(g.Permalinks.Slack, frag) }
+	} else {
+		return Group{}, fmt.Errorf("%w: %q is not an alert number or Slack link", ErrNotFound, ref)
+	}
+	for page := 1; page <= findPages; page++ {
+		code, b, err := c.do(ctx, http.MethodGet, fmt.Sprintf("/api/v1/alert_groups/?perpage=100&page=%d", page), nil)
+		if err != nil {
+			return Group{}, err
+		}
+		if code != http.StatusOK {
+			return Group{}, fmt.Errorf("irm: alert groups page %d: HTTP %d", page, code)
+		}
+		var out struct {
+			Results []Group `json:"results"`
+			Next    *string `json:"next"`
+		}
+		if err := json.Unmarshal(b, &out); err != nil {
+			return Group{}, err
+		}
+		for _, g := range out.Results {
+			if match(g) {
+				return g, nil
+			}
+		}
+		if out.Next == nil || len(out.Results) == 0 {
+			break
+		}
+	}
+	return Group{}, fmt.Errorf("%w: %s in the last %d groups", ErrNotFound, ref, findPages*100)
+}
+
+const findPages = 10
 
 func (c *Client) Group(ctx context.Context, id string) (Group, error) {
 	code, b, err := c.do(ctx, http.MethodGet, "/api/v1/alert_groups/"+url.PathEscape(id), nil)

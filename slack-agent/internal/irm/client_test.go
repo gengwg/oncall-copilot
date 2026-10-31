@@ -17,6 +17,10 @@ func newServer(t *testing.T) (*httptest.Server, *[]string) {
 		switch {
 		case r.Method == "GET" && r.URL.Path == "/oncall/api/v1/alert_groups/G1":
 			w.Write([]byte(`{"id":"G1","alert_group_number":41,"state":"firing","permalinks":{"slack":"https://s/p41"}}`))
+		case r.Method == "GET" && r.URL.Path == "/oncall/api/v1/alert_groups/" && r.URL.Query().Get("page") == "1":
+			w.Write([]byte(`{"next":"p2","results":[{"id":"G7","alert_group_number":7,"state":"firing","permalinks":{"slack":"https://x.slack.com/archives/C1/p100"}}]}`))
+		case r.Method == "GET" && r.URL.Path == "/oncall/api/v1/alert_groups/" && r.URL.Query().Get("page") == "2":
+			w.Write([]byte(`{"next":null,"results":[{"id":"G5474","alert_group_number":5474,"state":"firing","permalinks":{"slack":"https://x.slack.com/archives/C1/p200"},"last_alert":{"payload":{"alerts":[{"labels":{"alertname":"GPU Xid Critical","cluster":"c1","node":"n1"},"startsAt":"2026-10-30T20:00:00Z"}]}}}]}`))
 		case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/oncall/api/v1/schedules/S1/final_shifts"):
 			w.Write([]byte(`{"results":[{"user_pk":"ME","user_email":"me@x","shift_start":"2026-10-30T15:00:00Z","shift_end":"2026-10-31T15:00:00Z"}]}`))
 		case r.Method == "POST" && r.URL.Path == "/oncall/api/v1/alert_groups/G1/acknowledge":
@@ -98,5 +102,25 @@ func TestAllowlistBlocksOtherWrites(t *testing.T) {
 	req, _ = http.NewRequest("GET", s.URL+"/oncall/api/v1/alert_groups/G1", nil)
 	if _, err := hc.Do(req); err != nil {
 		t.Fatalf("reads are allowed: %v", err)
+	}
+}
+
+func TestFindGroup(t *testing.T) {
+	s, _ := newServer(t)
+	c, _ := New(s.URL+"/oncall", "tok", "")
+	ctx := context.Background()
+	g, err := c.FindGroup(ctx, "#5474")
+	if err != nil || g.ID != "G5474" || g.Labels()["node"] != "n1" || g.StartsAt() != "2026-10-30T20:00:00Z" {
+		t.Fatalf("by number: %+v %v", g, err)
+	}
+	g, err = c.FindGroup(ctx, "https://aranyaglobal.slack.com/archives/C1/p100")
+	if err != nil || g.ID != "G7" {
+		t.Fatalf("by permalink: %+v %v", g, err)
+	}
+	if _, err := c.FindGroup(ctx, "#42"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown number: %v", err)
+	}
+	if _, err := c.FindGroup(ctx, "banana"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("garbage ref: %v", err)
 	}
 }

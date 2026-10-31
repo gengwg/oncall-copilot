@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 
 type IRM interface {
 	Group(ctx context.Context, id string) (irm.Group, error)
+	FindGroup(ctx context.Context, ref string) (irm.Group, error)
 	Acknowledge(ctx context.Context, id string) error
 	Unacknowledge(ctx context.Context, id string) error
 }
@@ -394,11 +396,17 @@ func deref(s *string) string {
 
 // --- Replies from the owner.
 
-const help = "Reply in a brief's thread with `file` (draft the DC request now), `ignore` (never for this node for 14 days), `ack`, `unack`; or anywhere with `status`."
+const help = "Reply in a brief's thread with `file` (draft the DC request now), `ignore` (never for this node for 14 days), `ack`, `unack`; or send `file #5474` / `file <alert link>` (also `ack`, `unack`, `ignore`) as a new message for any alert; `status` anywhere."
+
+// slackLink strips Slack's <url|label> wrapping from a pasted link.
+var slackLink = regexp.MustCompile(`<([^|>]+)(?:\|[^>]*)?>`)
 
 // HandleInbound acts on one message from the owner.
 func (a *Agent) HandleInbound(ctx context.Context, in slackio.Inbound) {
-	cmd := strings.ToLower(strings.TrimSpace(in.Text))
+	text := strings.TrimSpace(slackLink.ReplaceAllString(in.Text, "$1"))
+	cmd, ref, _ := strings.Cut(text, " ")
+	cmd = strings.ToLower(cmd)
+	ref = strings.TrimSpace(ref)
 	reply := func(ts, text string) {
 		if err := a.Poster.Reply(ctx, ts, text); err != nil {
 			a.logf("reply: %v", err)
@@ -409,7 +417,34 @@ func (a *Agent) HandleInbound(ctx context.Context, in slackio.Inbound) {
 			a.logf("record %s: save failed: %v", r.IRMID, err)
 		}
 	}
-	if in.ThreadTS == "" {
+	threadTS := in.ThreadTS
+	var rec *event.Record
+	switch {
+	case threadTS == "" && ref != "" && (cmd == "file" || cmd == "ignore" || cmd == "ack" || cmd == "unack"):
+		// A command about any alert: attach the group to this message's thread.
+		g, err := a.IRM.FindGroup(ctx, ref)
+		if err != nil {
+			reply(in.TS, "Could not find that alert: "+err.Error())
+			return
+		}
+		threadTS = in.TS
+		rec, err = a.Store.ByThread(threadTS)
+		if err == nil && rec == nil {
+			if rec, err = a.Store.Get(g.ID); err == nil && rec == nil {
+				rec = &event.Record{IRMID: g.ID, Event: eventFromGroup(g), SlackTS: threadTS,
+					PostedAt: a.now().UTC().Format(time.RFC3339), PostAttempts: 1,
+					AckDecided: true, AckNote: "attached by hand; no automatic ack"}
+			}
+		}
+		if err != nil || rec == nil {
+			reply(in.TS, "Could not attach the alert: "+fmt.Sprint(err))
+			return
+		}
+		if rec.SlackTS == "" {
+			rec.SlackTS = threadTS
+		}
+		save(rec)
+	case threadTS == "":
 		switch cmd {
 		case "status":
 			reply(in.TS, a.status(ctx))
@@ -417,13 +452,16 @@ func (a *Agent) HandleInbound(ctx context.Context, in slackio.Inbound) {
 			reply(in.TS, help)
 		}
 		return
-	}
-	rec, err := a.Store.ByThread(in.ThreadTS)
-	if err != nil || rec == nil {
-		reply(in.ThreadTS, "No alert is attached to this thread. "+help)
-		return
+	default:
+		var err error
+		rec, err = a.Store.ByThread(threadTS)
+		if err != nil || rec == nil {
+			reply(threadTS, "No alert is attached to this thread. "+help)
+			return
+		}
 	}
 	ev := rec.Event
+	in.ThreadTS = threadTS
 	switch cmd {
 	case "file":
 		rec.DCStatus = "queued"
@@ -474,6 +512,21 @@ func (a *Agent) HandleInbound(ctx context.Context, in slackio.Inbound) {
 	default:
 		reply(in.ThreadTS, help)
 	}
+}
+
+// eventFromGroup builds the event the DC runner and replies need from an IRM
+// alert group the owner pointed at by hand. There is no brief, so the verdict
+// fields say so.
+func eventFromGroup(g irm.Group) event.Event {
+	l := g.Labels()
+	url := g.Permalinks.Slack
+	if url == "" {
+		url = g.Permalinks.Web
+	}
+	return event.Event{IRMID: g.ID, IRMNumber: g.Number, IRMURL: url, Alertname: l["alertname"],
+		Severity: l["severity"], Cluster: l["cluster"], Node: l["node"], StartsAt: g.StartsAt(),
+		Fault: "manual", Verdict: "manual", FailureMode: "manual", Brief: "(attached by hand, no brief)",
+		TS: time.Now().UTC().Format(time.RFC3339)}
 }
 
 func (a *Agent) status(ctx context.Context) string {
