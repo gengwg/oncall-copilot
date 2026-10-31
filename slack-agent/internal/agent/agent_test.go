@@ -167,7 +167,7 @@ func (h *harness) rec(id string) *event.Record {
 func ev(id string, num int, sev string, startsAt time.Time) event.Event {
 	return event.Event{IRMID: id, IRMNumber: num, IRMURL: "https://slack/p" + id, Alertname: "GPU Xid Critical",
 		Severity: sev, Cluster: "c1", Node: "n-" + id, StartsAt: startsAt.Format(time.RFC3339),
-		Fault: "real", Verdict: "page", FailureMode: "hardware", Brief: "ALERT: GPU Xid Critical (" + sev + ")", TS: now.Format(time.RFC3339)}
+		Fault: "real", Verdict: "hold", FailureMode: "hardware", Brief: "ALERT: GPU Xid Critical (" + sev + ")", TS: now.Format(time.RFC3339)}
 }
 
 func withDraft(e event.Event) event.Event {
@@ -211,6 +211,8 @@ func TestNoAckCases(t *testing.T) {
 		{"schedule unavailable", nil, ev("G1", 1, "critical", now.Add(-time.Minute)), nil, "schedule unavailable"},
 		{"fired on the previous shift", myShift, ev("G1", 1, "warning", handoff.Add(-2*time.Minute)), nil, "before your shift"},
 		{"degraded brief", myShift, func() event.Event { e := ev("G1", 1, "critical", now); e.Degraded = &deg; return e }(), nil, "brief degraded"},
+		{"page verdict keeps escalating", myShift, func() event.Event { e := ev("G1", 1, "critical", now); e.Verdict = "page"; return e }(), nil, "verdict page, IRM keeps paging"},
+		{"unknown verdict is not a hold", myShift, func() event.Event { e := ev("G1", 1, "critical", now); e.Verdict = "unknown"; return e }(), nil, "verdict unknown"},
 		{"info does not page", myShift, ev("G1", 1, "info", now), nil, "does not page"},
 		{"already acked by a human", myShift, ev("G1", 1, "critical", now), func(h *harness) { h.irm.states = map[string]string{"G1": "acknowledged"} }, "already acknowledged"},
 		{"resolved meanwhile", myShift, ev("G1", 1, "critical", now), func(h *harness) { h.irm.states = map[string]string{"G1": "resolved"} }, "already resolved"},

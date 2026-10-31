@@ -272,7 +272,10 @@ It can never be wrong in the "quiet" direction, because it has no quiet action.
 
 Weigang decided to run a personal Slack agent (`slack-agent/`) that acks new
 pages, under his own IRM token, only while the IRM schedule says the shift is
-his and only after the brief has been delivered to him as a Slack DM. The
+his, only after the brief has been delivered to him as a Slack DM, and only
+when the brief's verdict is `hold`. A `page` verdict is left alone so his own
+push, SMS and call steps still fire: an ack one or two minutes in would cancel
+them. The
 reasoning above still holds for everyone else's shifts, where the agent never
 acks. What replaces the escalation chain during his shift is the DM thread:
 every ack is announced in the thread of the brief it belongs to, so nothing
