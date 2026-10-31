@@ -4,7 +4,8 @@ A private, always-on AI on-call copilot. It watches your alerts, investigates
 **before** paging you, and sends a Telegram brief with the likely root cause,
 the evidence, and a suggested first action from your own runbooks.
 
-Built for the **Nebius x NVIDIA Global AI Hackathon** — **Personal AI track**.
+Built for the **Nebius x NVIDIA Global AI Hackathon** — **Personal AI track**,
+then extended to a real on-call rotation (see "Real on-call mode").
 
 Instead of waking you with a raw alert, the copilot does the first five minutes
 of incident response for you: confirms the alert against live metrics, reads
@@ -57,6 +58,29 @@ demo-app (/chaos) -> Prometheus alert -> Alertmanager --webhook--> alert-relay
                                                             incident dashboard
                                                             (Nebius Serverless)
 ```
+
+## Real on-call mode (beyond the demo)
+
+The same investigation runs against a real Grafana IRM rotation, as two
+services on one always-on host:
+
+```
+Grafana IRM alert groups --poll (read-only SA token)--> alert-relay/irm-poll.sh
+   (restricted system user, systemd timer)   -> investigate.sh -> brief + DC draft
+                                              -> one JSON event per brief in an outbox
+                                                        |
+                                                        v  (group-readable)
+   slack-agent/ (Go, the owner's user, systemd --user, Socket Mode)
+     -> DM the brief to the owner, reply in-thread with the ack decision
+     -> ack in IRM only on the owner's own shift, only for a `hold` verdict,
+        only after the DM posted; everything else keeps escalating
+     -> real hardware faults: run the /file-dc-request skill headless (draft only)
+     -> owner replies: file, ignore, ack, unack, status; or `file #1234` / `file <card link>`
+```
+
+Why it is shaped this way, and why acks are so narrow, is in
+`docs/real-oncall-research.md`. Deploy steps and the Slack app settings are in
+`deploy/systemd/README.md`. The agent starts in dry run (`ACK_DRY_RUN=1`).
 
 ## Layout
 
