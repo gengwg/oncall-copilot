@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        dir: [alert-relay, demo-app, deploy/dashboard]
+        dir: [alert-relay, demo-app, deploy/dashboard, slack-agent]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v5

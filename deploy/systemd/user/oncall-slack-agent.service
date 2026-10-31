@@ -1,0 +1,16 @@
+[Unit]
+Description=On-call copilot Slack agent (DMs briefs, acks on the owner's own shift, drafts DC requests)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/oncall-copilot/agent.env
+ExecStart=%h/.local/bin/oncall-slack-agent
+Restart=on-failure
+RestartSec=30s
+# claude -p for the DC skill inherits this environment; keep it a login-like PATH.
+Environment=PATH=%h/.local/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=default.target
