@@ -54,6 +54,10 @@ func main() {
 		Ledger: ledger.New(filepath.Join(cfg.AgentStateDir, "dc-requests.tsv")),
 		Runner: dcrequest.ExecRunner{Bin: cfg.ClaudeBin, Dir: cfg.MetarepoDir, Model: cfg.ClaudeModel, Timeout: 10 * time.Minute},
 		DryRun: cfg.AckDryRun, CollapseMax: cfg.CollapseMax, Log: lg,
+		DigestAt: cfg.DigestAt, DigestMarker: filepath.Join(cfg.AgentStateDir, "digest-last"),
+	}
+	if cfg.DigestAt != "" {
+		a.DigestTZ, _ = time.LoadLocation(cfg.DigestTZ) // validated in config
 	}
 
 	refresh := func() {
@@ -92,7 +96,7 @@ func main() {
 		}
 	}()
 
-	lg.Printf("started: outbox %s, dry run %v, every %s, heartbeat %v", cfg.OutboxDir, cfg.AckDryRun, cfg.ScanInterval, cfg.HeartbeatURL != "")
+	lg.Printf("started: outbox %s, dry run %v, every %s, heartbeat %v, off-shift digest at %q %s", cfg.OutboxDir, cfg.AckDryRun, cfg.ScanInterval, cfg.HeartbeatURL != "", cfg.DigestAt, cfg.DigestTZ)
 	// Pinged only after a scan that read the outbox, so IRM alerts when the
 	// agent dies, loses the outbox, or stalls. The URL carries a secret: never logged.
 	heartbeat := func() {

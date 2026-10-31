@@ -143,6 +143,7 @@ func newHarness(t *testing.T, shifts []oncall.Shift) *harness {
 		Outbox: out, Store: store, Poster: h.poster, IRM: h.irm, Shifts: fakeShifts{shifts},
 		Ledger: ledger.New(filepath.Join(dir, "dc.tsv")), Runner: h.runner,
 		CollapseMax: 6, Now: func() time.Time { return now },
+		DigestMarker: filepath.Join(dir, "digest-last"),
 	}
 	return h
 }
@@ -496,5 +497,58 @@ func TestSentReplyMarksTheLedger(t *testing.T) {
 	e, ok := h.a.Ledger.Recent("c1", "n-G1", now.Add(-time.Hour))
 	if !ok || e.Status != "sent" {
 		t.Fatalf("ledger: %+v ok=%v", e, ok)
+	}
+}
+
+func TestOffShiftBriefsWaitForTheDigest(t *testing.T) {
+	h := newHarness(t, theirShift)
+	h.a.DigestAt = "08:05"
+	h.a.DigestTZ = time.UTC
+	clock := handoff.Add(2 * time.Hour) // 17:00Z, after today's 08:05 digest time
+	h.a.Now = func() time.Time { return clock }
+	h.put(withDraft(ev("G1", 1, "critical", clock)))
+	h.put(ev("G2", 2, "warning", clock))
+	h.tick()
+	if len(h.poster.posts) != 0 || len(h.irm.acks) != 0 || len(h.runner.calls) != 0 {
+		t.Fatalf("off shift: no DM, no ack, no skill run; posts=%d acks=%v runs=%v", len(h.poster.posts), h.irm.acks, h.runner.calls)
+	}
+	if r := h.rec("G1"); !r.Deferred || !r.AckDecided || r.SlackTS != "" {
+		t.Fatalf("record: %+v", r)
+	}
+	// Deferred after today's 08:05, so they belong to tomorrow's digest; today's
+	// ran empty and only wrote the marker.
+	h.tick()
+	if len(h.poster.posts) != 0 {
+		t.Fatal("no second digest the same day")
+	}
+	clock = clock.Add(24 * time.Hour)
+	h.tick()
+	if len(h.poster.posts) != 1 || !strings.Contains(h.poster.posts[0], "2 brief(s)") || !strings.Contains(h.poster.posts[0], "reply `file #1`") {
+		t.Fatalf("digest: %v", h.poster.posts)
+	}
+	if !h.rec("G1").Digested || !h.rec("G2").Digested {
+		t.Fatal("digested records must be marked")
+	}
+	h.tick()
+	if len(h.poster.posts) != 1 {
+		t.Fatal("digested records must not be posted again")
+	}
+	// A deferred alert can still be acted on by reference, in its own thread.
+	h.irm.findable = map[string]irm.Group{"#1": {ID: "G1", Number: 1, State: "firing"}}
+	h.a.HandleInbound(context.Background(), slackio.Inbound{TS: "u1", Text: "file #1"})
+	h.a.DrainDC(context.Background())
+	if len(h.runner.calls) != 1 || h.rec("G1").SlackTS != "u1" || h.rec("G1").DCStatus != "drafted" {
+		t.Fatalf("file by reference on a deferred brief: runs=%v rec=%+v", h.runner.calls, h.rec("G1"))
+	}
+}
+
+func TestOnShiftBriefsStillPostWithDigestOn(t *testing.T) {
+	h := newHarness(t, myShift)
+	h.a.DigestAt = "08:05"
+	h.a.DigestTZ = time.UTC
+	h.put(ev("G1", 1, "critical", now.Add(-time.Minute)))
+	h.tick()
+	if len(h.poster.posts) != 1 || len(h.irm.acks) != 1 {
+		t.Fatalf("my shift: posts=%d acks=%v", len(h.poster.posts), h.irm.acks)
 	}
 }

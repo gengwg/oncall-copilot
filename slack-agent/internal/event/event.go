@@ -49,6 +49,9 @@ type Record struct {
 	PostAttempts int    `json:"post_attempts"`
 	PostFailed   bool   `json:"post_failed,omitempty"`
 	Collapsed    bool   `json:"collapsed,omitempty"`
+	Deferred     bool   `json:"deferred,omitempty"` // off-shift: held for the morning digest, no DM
+	DeferredAt   string `json:"deferred_at,omitempty"`
+	Digested     bool   `json:"digested,omitempty"`
 	AckDecided   bool   `json:"ack_decided"`
 	AckedAt      string `json:"acked_at,omitempty"`
 	AckNote      string `json:"ack_note,omitempty"`
@@ -131,6 +134,22 @@ func (s *Store) ByThread(ts string) (*Record, error) {
 		}
 	}
 	return nil, nil
+}
+
+// Undigested returns deferred records that no digest has covered yet, oldest first.
+func (s *Store) Undigested() ([]Record, error) {
+	all, err := s.All()
+	if err != nil {
+		return nil, err
+	}
+	var out []Record
+	for _, r := range all {
+		if r.Deferred && !r.Digested {
+			out = append(out, r)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt < out[j].UpdatedAt })
+	return out, nil
 }
 
 // PostedSince counts individual (not collapsed) posts since t, for the storm cap.

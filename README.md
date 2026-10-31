@@ -71,7 +71,8 @@ Grafana IRM alert groups --poll (read-only SA token)--> alert-relay/irm-poll.sh
                                                         |
                                                         v  (group-readable)
    slack-agent/ (Go, the owner's user, systemd --user, Socket Mode)
-     -> DM the brief to the owner, reply in-thread with the ack decision
+     -> on the owner's shift: DM the brief, reply in-thread with the ack decision
+     -> on other shifts: hold it; one digest DM per day at 08:05 local
      -> ack in IRM only on the owner's own shift, only for a `hold` verdict,
         only after the DM posted; everything else keeps escalating
      -> real hardware faults: run the /file-dc-request skill headless (draft only)
