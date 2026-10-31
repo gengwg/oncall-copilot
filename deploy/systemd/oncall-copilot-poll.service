@@ -10,7 +10,7 @@ Group=oncall-copilot
 # The env file sets PROMETHEUS_TOKEN=$GRAFANA_TOKEN, which EnvironmentFile=
 # would not expand, so bash sources it.
 ExecStart=/usr/bin/bash -c 'set -a; . /var/lib/oncall-copilot/.config/oncall-copilot/env; set +a; \
-  export WORKSPACE=/var/lib/oncall-copilot/ws; \
+  export WORKSPACE=/var/lib/oncall-copilot/ws OUTBOX_DIR=/var/lib/oncall-copilot/outbox; \
   exec bash /var/lib/oncall-copilot/oncall-copilot/alert-relay/irm-poll.sh'
 # Several investigations in one poll can each wait up to 150s on the model.
 TimeoutStartSec=900

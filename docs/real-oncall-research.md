@@ -268,6 +268,20 @@ which is the policy the team already wrote down, and critical pages as before.
 If the copilot is wrong in the "real" direction, someone is woken for nothing.
 It can never be wrong in the "quiet" direction, because it has no quiet action.
 
+### Phase 1 amendment (2026-10-31): acks on the owner's own shift
+
+Weigang decided to run a personal Slack agent (`slack-agent/`) that acks new
+pages, under his own IRM token, only while the IRM schedule says the shift is
+his and only after the brief has been delivered to him as a Slack DM. The
+reasoning above still holds for everyone else's shifts, where the agent never
+acks. What replaces the escalation chain during his shift is the DM thread:
+every ack is announced in the thread of the brief it belongs to, so nothing
+acked is unreported, and a dead agent, a failed DM or a stale schedule all fail
+closed to "not acked, IRM escalates as before". The agent's IRM writes are the
+two acknowledge endpoints, enforced by an HTTP transport allowlist in
+`slack-agent/internal/irm` with a unit test, not by convention. Hardware briefs
+also trigger the metarepo `/file-dc-request` skill, headless and draft-only.
+
 ### Safety limits for unattended runs
 
 - No ack, resolve, silence, unsilence, delete, label or maintenance-mode

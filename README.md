@@ -74,6 +74,11 @@ demo-app (/chaos) -> Prometheus alert -> Alertmanager --webhook--> alert-relay
   Apply with `nemoclaw <sb> policy add --from-file deploy/policy-local-observability.yaml
   --trusted-private-host 172.18.0.1 --yes`; NemoClaw v0.0.123+ refuses RFC1918
   endpoints without that explicit trust flag
+- `slack-agent/` — the real-on-call Slack side (Go): reads the poller's outbox,
+  DMs each brief to one person, lets them steer by replying (`file`, `ignore`,
+  `ack`, `unack`, `status`), acks pages during that person's own IRM shift once
+  the brief has reached them, and drafts DC hardware requests through the
+  metarepo `/file-dc-request` skill (`deploy/systemd/user/`, `deploy/systemd/install-slack-agent.sh`)
 - `tests/e2e/` — chaos-scenario end-to-end harness
 - `spike/` — Phase 0 verification (Token Factory, NemoClaw onboarding)
 - `docs/` — architecture, feedback, plan
