@@ -33,6 +33,26 @@ minikube (demo env)
                           (the page, deliveryStatus: delivered)
 ```
 
+## Real on-call path (since v1.4.0)
+
+```
+IRM alert groups -> irm-poll.sh (timer, restricted user, read-only token)
+  seen/storm/repeat filters -> investigate.sh -> brief, incident report, DC draft file
+  -> $OUTBOX_DIR/<irm_id>.json  (tmp+rename; skipped groups emit nothing)
+
+slack-agent (owner's user, Socket Mode)
+  scan outbox every 10s -> per-event record {slack_ts, acked_at, dc_status}
+  -> PostDM(brief)  -> ack gate: my shift (IRM final_shifts, fail closed),
+                       alert fired in my shift, verdict hold, group still firing
+  -> Acknowledge via a transport that allows only /acknowledge and /unacknowledge
+  -> dc_draft set & node not in ledger (14d) -> claude -p /file-dc-request, draft only
+  <- owner DM commands, matched to records by thread ts or by #number / card link
+```
+
+Each record stage is saved before the next side effect, so a restart repeats
+nothing. A dead agent, a failed DM or a stale shift table all mean "not acked",
+which is what IRM did before the agent existed.
+
 ## Key implementation decisions
 
 - **Command payload, not agent turn.** This OpenClaw build (2026.7.1) does not
