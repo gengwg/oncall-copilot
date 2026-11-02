@@ -253,9 +253,9 @@ hdr=$(grep '^=== ' "$SNAP/briefs.log" 2>/dev/null | tail -n 1)
 #     unit file and a clone that get out of step keep polling.
 SA="$TMP/state-poll"; SB="$TMP/state-shim"
 set_groups "$(group G1 101 acknowledged NvlinkDown c1 warning)"
-run_poll STATE_DIR="$SA"; run_poll STATE_DIR="$SB" POLL_SCRIPT=irm-poll.sh
+run_poll STATE_DIR="$SA"; POLL_SCRIPT=irm-poll.sh run_poll STATE_DIR="$SB"
 set_groups "$(group G3 103 new GpuFellOff c2 critical)" "$(group G1 101 acknowledged NvlinkDown c1 warning)"
-run_poll STATE_DIR="$SA"; run_poll STATE_DIR="$SB" POLL_SCRIPT=irm-poll.sh
+run_poll STATE_DIR="$SA"; POLL_SCRIPT=irm-poll.sh run_poll STATE_DIR="$SB"
 strip() { sed -E 's/^=== [0-9T:-]+Z /=== /' "$1"; }
 [ -s "$SB/briefs.log" ] && [ "$(strip "$SA/briefs.log")" = "$(strip "$SB/briefs.log")" ] && ok "shim -> same briefs log as poll.sh" || bad "shim -> same briefs log as poll.sh" "poll.sh: $(cat "$SA/briefs.log" 2>&1) shim: $(cat "$SB/briefs.log" 2>&1)"
 
@@ -266,6 +266,7 @@ printf '%s\n' G3 G2 G1 > "$S15/seen"
 set_groups "$(group G3 103 new GpuFellOff c2 critical)" "$(group G2 102 new XidCritical c1 critical)" "$(group G1 101 acknowledged NvlinkDown c1 warning)"
 : > "$TMP/investigated"
 run_poll STATE_DIR="$S15"
+[ "$RC" -eq 0 ] && ok "old state -> exit 0" || bad "old state -> exit 0" "rc=$RC err=$ERR"
 lacks "old state -> no bootstrap" "bootstrapped" "$OUT$ERR"
 [ ! -s "$TMP/investigated" ] && ok "old state -> nothing investigated" || bad "old state -> nothing investigated" "$(cat "$TMP/investigated")"
 
@@ -301,6 +302,26 @@ run_poll STATE_DIR="$S18" PAGER=less
 set_groups "$(group P2 602 new GpuFellOff c40 critical)" "$(group P1 601 acknowledged NvlinkDown c40 warning)"
 run_poll STATE_DIR="$S18" PAGER=less
 check "shell PAGER=less -> irm adapter still used" "IRM #602" "$(cat "$S18/briefs.log" 2>&1)"
+
+# 19. Groups IRM lists without alert detail must not fail the poll: no alerts
+#     key, a null last_alert, and no alert_group_number. The first two have no
+#     severity, so the filter skips them; the third is investigated and still
+#     gets an event, with a null irm_number.
+S19="$TMP/state-odd"; OB19="$TMP/outbox-odd"
+odd_noalerts=$(group O1 701 new X c50 critical | jq -c 'del(.last_alert.payload.alerts) | del(.last_alert.payload.commonLabels)')
+odd_nulllast=$(group O2 702 new X c50 critical | jq -c '.last_alert = null')
+set_groups "$(group O0 700 acknowledged Old c50 warning)"
+run_poll STATE_DIR="$S19" OUTBOX_DIR="$OB19"
+set_groups "$(group O3 703 new OddOk c50 critical | jq -c 'del(.alert_group_number)')" "$odd_nulllast" "$odd_noalerts" "$(group O0 700 acknowledged Old c50 warning)"
+: > "$TMP/investigated"
+run_poll STATE_DIR="$S19" OUTBOX_DIR="$OB19"
+[ "$RC" -eq 0 ] && ok "odd groups -> poll succeeds" || bad "odd groups -> poll succeeds" "rc=$RC err=$ERR"
+[ "$(wc -l < "$TMP/investigated" | tr -d ' ')" = 1 ] && check "odd groups -> only the normal group investigated" '"alertname":"OddOk"' "$(cat "$TMP/investigated")" || bad "odd groups -> only the normal group investigated" "$(cat "$TMP/investigated")"
+jq -e '.irm_number == null and .id == "O3" and .irm_id == "O3"' "$OB19/O3.json" >/dev/null && ok "no group number -> event written, irm_number null" || bad "no group number -> event written, irm_number null" "$(cat "$OB19/O3.json" 2>&1)"
+[ -z "$(ls "$OB19"/*.tmp 2>/dev/null)" ] && ok "no group number -> no temp file left" || bad "no group number -> no temp file left" "$(ls "$OB19")"
+: > "$TMP/investigated"
+run_poll STATE_DIR="$S19" OUTBOX_DIR="$OB19"
+[ "$RC" -eq 0 ] && [ ! -s "$TMP/investigated" ] && ok "odd groups -> not revisited" || bad "odd groups -> not revisited" "rc=$RC $(cat "$TMP/investigated")"
 
 echo
 echo "$PASS passed, $FAIL failed"

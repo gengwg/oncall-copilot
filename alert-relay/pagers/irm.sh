@@ -25,12 +25,12 @@ fi
 # alert's own severity is the firing alert's label. The customer label is
 # dropped: it adds nothing to the evidence and it leaves the host.
 jq -c '.results | reverse | .[]
-  | (.last_alert.payload.alerts | (map(select(.status == "firing")) | first) // .[0]) as $a
+  | ((.last_alert.payload.alerts // []) | (map(select(.status == "firing")) | first) // .[0]) as $a
   | {id, ref: (.alert_group_number | tostring),
      url: (.permalinks.slack // .permalinks.web // ""), state,
      severity: (.last_alert.payload.commonLabels.severity // .last_alert.payload.alerts[0].labels.severity // ""),
      alert: {alertname: ($a.labels.alertname // "Unknown"),
              severity: ($a.labels.severity // "warning"),
              summary: ($a.annotations.summary // ""), description: ($a.annotations.description // ""),
-             labels: ($a.labels | del(.customer)), starts_at: ($a.startsAt // "")}}' "$body" \
+             labels: (($a.labels // {}) | del(.customer)), starts_at: ($a.startsAt // "")}}' "$body" \
   || { echo "error: IRM alert_groups returned a body that is not alert groups" >&2; exit 1; }

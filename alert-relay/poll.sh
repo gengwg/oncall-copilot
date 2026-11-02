@@ -64,7 +64,7 @@ heartbeat() {
     return 0
   fi
   curl -fsS -m 10 -o /dev/null "$HEARTBEAT_URL" 2>/dev/null \
-    || echo "warn: heartbeat ping failed; the pager will alert if pings stay missing" >&2
+    || echo "warn: heartbeat ping failed; $LABEL will alert if pings stay missing" >&2
 }
 
 # Runs inside the lock, as the fetch always did. A failed adapter must not read
@@ -103,7 +103,7 @@ emit_event() { # emit_event <id> <alert-line-json> <brief> <degraded-reason>
      degraded: (if $degraded == "" then null else $degraded end),
      dc_draft: (field("DC draft: ") | if . == "" then null else . end),
      brief: $brief, ts: $ts}
-    | if .pager == "irm" then . + {irm_id: .id, irm_number: (.ref | tonumber), irm_url: .url} else . end' > "$f.tmp" && mv "$f.tmp" "$f"
+    | if .pager == "irm" then . + {irm_id: .id, irm_number: (.ref | tonumber? // null), irm_url: .url} else . end' > "$f.tmp" && mv "$f.tmp" "$f"
 }
 
 now=$(date +%s)
