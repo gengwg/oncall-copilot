@@ -446,7 +446,7 @@ run_poll STATE_DIR="$H12" HEARTBEAT_URL="$HB21"
 [ -s "$H12/last-ok" ] && [ ! -s "$H12/health.log" ] && ok "health: first run after deploy -> last-ok, no gap" || bad "health: first run after deploy -> last-ok, no gap" "$(hlog "$H12")"
 
 # A broken state dir (health.log or last-ok is a directory) adds nothing to stderr.
-H14="$TMP/state-h14"; mk_state "$H14"; mkdir "$H14/health.log" "$H14/last-ok"
+H14="$TMP/state-h14"; mk_state "$H14"; command rm -rf "$H14/health.log" "$H14/last-ok"; mkdir "$H14/health.log" "$H14/last-ok"
 run_poll STATE_DIR="$H14" HEARTBEAT_URL="$HB21"
 [ "$RC" -eq 0 ] && [ -z "$ERR" ] && ok "health: unwritable health files -> silent, exit 0" || bad "health: unwritable health files -> silent, exit 0" "rc=$RC err=$ERR"
 run_poll STATE_DIR="$H14" HEARTBEAT_URL="http://127.0.0.1:9/heartbeat/x"
