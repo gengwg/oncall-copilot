@@ -28,3 +28,4 @@ jobs:
       - run: ./tests/investigate_test.sh
       - run: ./tests/query_scripts_test.sh
       - run: ./tests/irm_poll_test.sh
+      - run: ./tests/score_verdicts_test.sh

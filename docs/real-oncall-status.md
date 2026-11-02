@@ -65,7 +65,28 @@ the operator's admin kubeconfigs, in a sandboxed unit (`ProtectHome`,
 ## Open
 
 1. **Phase 1 exit test.** Compare each brief's verdict with what on-call did.
-   Pass: no `hold` on an alert that needed someone that night.
+   Pass: no `hold` on an alert that needed someone that night. On the host,
+   as the owner (read-only, GET requests only; output has alert titles and
+   links, so keep it on the terminal):
+   `set -a; . ~/.config/oncall-copilot/agent.env; set +a; IRM_TOKEN=$IRM_PERSONAL_TOKEN bash alert-relay/score-verdicts.sh /var/lib/oncall-copilot/.local/state/oncall-copilot/briefs.log`.
+   Each brief gets a category. `MISS?`: `hold` and a human acked or resolved
+   it. `hold-ok`: `hold`, resolved, nobody acted. `page-ok`: `page` (or no
+   readable verdict) and a human acted. `false-page?`: `page`, resolved,
+   nobody acted. `open`: not resolved, nobody acted yet; it can still be
+   acked later, so recheck any `open` hold before declaring A2 passed.
+   `unknown`: the lookup or parse failed; it is never counted as ok. `MISS?`
+   is a candidate list, not a verdict: the team acks most pages, noise
+   included, so "a human acted" does not by itself mean the alert needed
+   someone. The owner reads each `MISS?` row and decides. The summary also
+   gives the false-page rate (`false-page?` / (`page-ok` + `false-page?`);
+   `open` and `unknown` rows are left out), the same counts for night briefs,
+   and `entries parsed` (with the distinct id count, so a twice-briefed id
+   shows) against `headers seen`, with a WARNING if they differ. It also
+   counts NUL blocks in the log and `Verdict:` lines that sit outside any
+   entry, with a WARNING when there are any: the evidence has a gap. Score
+   only periods when `ACK_DRY_RUN=1` held: live copilot acks use the owner's
+   personal token and show as the owner, so any live-ack period makes
+   `page-ok` too high and the false-page rate too low.
 2. **Agent dry run.** Flip `ACK_DRY_RUN=0` after one observed handoff
    (`deploy/systemd/README.md`, Going live).
 3. **False-alarm pings.** IRM pages before the copilot looks, so only an IRM
