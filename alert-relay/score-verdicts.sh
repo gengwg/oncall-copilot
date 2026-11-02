@@ -52,7 +52,8 @@ tr '\000' '\n' < "$LOG" | awk -v hdrs="$T/hdrs" '
 # created_at has fractional seconds, which fromdateiso8601 rejects.
 CLASSIFY='
   def epoch: sub("\\.[0-9]+"; "") | fromdateiso8601;
-  (.created_at | epoch) as $c
+  (if (.state | type) == "string" and (.created_at | type) == "string" then . else error("malformed group") end)
+  | (.created_at | epoch) as $c
   | ((.acknowledged_by != null) or (.resolved_by != null)) as $acted
   | ([(if .acknowledged_by != null then .acknowledged_at else empty end),
       (if .resolved_by != null then .resolved_at else empty end)]

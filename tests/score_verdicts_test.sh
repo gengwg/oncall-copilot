@@ -112,6 +112,10 @@ add U1 "$P" none
 add N1 "Verdict: page - no group file, but the id is fine\n" none
 add J1 "$H" 2026-11-02T19:30:00Z resolved
 echo 'not json at all' > "$TMP/groups/GJ1.json"
+add W1 "$P" none
+echo '{"id":"GW1","created_at":"2026-10-30T12:00:00Z"}' > "$TMP/groups/GW1.json"
+add W2 "$P" none
+echo '{"id":"GW2","created_at":"2026-10-30T12:00:00Z","state":7}' > "$TMP/groups/GW2.json"
 # Night boundaries (PST, after the 2026-11-01 DST change): 21:59 no, 22:00 yes, 07:59 yes, 08:00 no.
 add B1 "$H" 2026-11-03T05:59:00Z resolved null null null '"2026-11-03T06:30:00Z"'
 add B2 "$H" 2026-11-03T06:00:00Z resolved null null null '"2026-11-03T06:30:00Z"'
@@ -148,6 +152,8 @@ cat_of O1 'open'
 cat_of U1 'unknown'
 cat_of N1 'unknown'
 cat_of J1 'unknown'
+cat_of W1 'unknown'
+cat_of W2 'unknown'
 check "P3 (no Verdict line) reads as page" "page" "$(col P3 4)"
 check "P4 (hold then page) last verdict wins" "page" "$(col P4 4)"
 check "H1 is a night brief (02:00 PST)" "yes" "$(col H1 5)"
@@ -155,10 +161,11 @@ check "H1 minutes to first human action" "12" "$(col H1 7)"
 check "P1 minutes (resolved by a human)" "30" "$(col P1 7)"
 check "H1 row carries the slack link" "https://slack.test/GH1" "$(col H1 11)"
 check "H1 row carries the title" "title GH1" "$(col H1 10)"
-check "P2 (auto-resolved) has no minutes" "" "$(col P2 7)"
+empty() { [ -z "$(col "$2" "$3")" ] && ok "$1" || bad "$1" "expected empty, got: $(col "$2" "$3")"; }
+empty "P2 (auto-resolved) has no minutes" P2 7
 check "P2 night (22:30 PDT)" "yes" "$(col P2 5)"
 check "H2 is not night (13:00 PST)" "no" "$(col H2 5)"
-check "unknown rows leave night empty" "" "$(col U1 5)"
+empty "unknown rows leave night empty" U1 5
 
 for b in "B1 no" "B2 yes" "B3 yes" "B4 no" "B5 no" "B6 yes" "D1 yes" "D2 yes"; do
   set -- $b
