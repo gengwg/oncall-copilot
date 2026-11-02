@@ -32,4 +32,6 @@ sudo journalctl -u oncall-copilot-poll.service -n 5 --no-pager -o cat
 
 sudo systemctl enable --now oncall-copilot-poll.timer
 systemctl list-timers oncall-copilot-poll.timer --no-pager
+# Read as the poller's user: git refuses a clone owned by someone else.
+echo "installed: $(sudo -H -u "$U" git -C "$H/oncall-copilot" log --oneline -1)"
 echo "briefs: $H/.local/state/oncall-copilot/briefs.log (read with: sudo tail -f ...)"
