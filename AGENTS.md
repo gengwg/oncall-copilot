@@ -2,7 +2,8 @@
 
 Notes for coding agents working on this repo. What the project is and how it
 fits together: `README.md`, `docs/architecture.md`, and for the real on-call
-mode `docs/real-oncall-research.md` and `deploy/systemd/README.md`.
+mode `docs/real-oncall-research.md` and `deploy/systemd/README.md`. What is
+live, what was decided and what is still open: `docs/real-oncall-status.md`.
 
 ## Runtime content is not for you
 

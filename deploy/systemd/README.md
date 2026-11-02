@@ -21,8 +21,9 @@ any unit is installed:
 2. **A read-only ServiceAccount on every in-service cluster** (get/list on
    nodes, pods, events, namespaces) with a long-lived token written to
    `<KUBECONFIG_DIR>/<cluster>.kubeconfig`. The manifest and the minting script
-   are not in this repository yet; they live with the fleet's infrastructure
-   code. Never the admin kubeconfigs.
+   are not in this repository, and not yet in the fleet's infrastructure code
+   either: they are a local patch on the operator's workstation (see
+   `docs/real-oncall-status.md`, Open). Never the admin kubeconfigs.
 3. **The poller's env file** at `/var/lib/oncall-copilot/.config/oncall-copilot/env`
    (0600, owned by `oncall-copilot`): `IRM_API_URL`, `GRAFANA_URL`,
    `GRAFANA_TOKEN`, `PROMETHEUS_TOKEN=$GRAFANA_TOKEN`, `KUBECONFIG_DIR`,
