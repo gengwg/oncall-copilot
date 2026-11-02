@@ -1,0 +1,105 @@
+# Real on-call mode: status and handoff
+
+Where the real on-call work stands, what was decided and why, and what is
+still open, so the next agent can pick it up. Last updated 2026-11-01.
+
+How to deploy is in `deploy/systemd/README.md`; the background and the phased
+plan are in `docs/real-oncall-research.md`. Internal names (host, clusters,
+channels, IDs) stay out of this public repo. They live in the operator's
+`~/.config/oncall-copilot/` and in the project's Claude memory notes.
+
+## What is live
+
+| Service | State | Writes |
+|---|---|---|
+| Poller (`alert-relay/irm-poll.sh`, systemd timer, every 60 s) | live, shadow mode | briefs log, outbox, DC drafts |
+| Slack agent (`slack-agent/`, user service) | live, `ACK_DRY_RUN=1` | Slack DMs, "would ack" notes |
+
+The poller reads Grafana IRM alert groups with a Viewer token, investigates
+each new critical or warning group once with `investigate.sh`, and writes a
+brief with a verdict. Node evidence comes from a read-only ServiceAccount on
+every in-service cluster. It runs as a dedicated nologin user that cannot read
+the operator's admin kubeconfigs, in a sandboxed unit (`ProtectHome`,
+`ProtectSystem=strict`).
+
+## How it got here
+
+| Phase | PRs | What |
+|---|---|---|
+| Research | #40 | `docs/real-oncall-research.md` |
+| 0: evidence and credentials | #41-#44 | bearer token for the query scripts; node evidence for alerts with `cluster`/`node` labels; computed state of the alert's own node condition; health-check conditions (`*Passed`) read as normal when True |
+| 1: shadow poller | #45-#47 | IRM poller with storm caps; page-or-hold verdict; systemd timer |
+| Monitoring | #48, #49, #51 | IRM heartbeat; held after two degraded briefs in a row |
+| DC drafts | #50 | `FAULT: real\|false-alarm` call; pre-filled `/file-dc-request` draft for real hardware/fabric faults; one retry of a failed model call |
+| Slack agent | #52-#55, #57, #58 | briefs as DMs; acks for healthy hold-verdict briefs of alerts that fired during the owner's shift; installer re-exec; `file`/`ack`/`unack`/`ignore` by alert number or link; `sent` reply and agent heartbeat; daily digest for off-shift briefs |
+| Docs | #56, #59, #60 | deploy README and architecture notes (#56), `AGENTS.md` (#59), README testing section (#60) |
+
+## Decisions and why
+
+- **Poll IRM, no webhook.** Needs no public endpoint and sees every alert
+  group, including ones IRM never posted to Slack.
+- **Read-only credentials, separate user.** The credentials cap what a wrong
+  model call can do; the sandbox does not have to.
+- **Verdict and fault are separate calls.** `page|hold` is urgency, `real|false-alarm`
+  is whether to file. A dead GPU on a drained node holds but still gets a DC draft.
+  A missing call reads as page and as real: a wrong page costs sleep, a missing
+  ticket costs more.
+- **Facts the model must not infer are computed in code.** Live replays showed
+  the model trusts the alert's wording over a condition missing from the
+  evidence, so the alert condition's state and timing are stated outright.
+- **Heartbeats go to a quiet channel with no escalation**, as the deploy
+  README recommends, so a dead shadow service is visible but wakes nobody. The
+  poller skips the ping on any failed poll and holds it after two degraded
+  briefs in a row (one upstream blip does not alert); once held, it stays held
+  until a healthy brief.
+- **Acks are narrow, and dry run first.** Only healthy briefs with a hold
+  verdict, for paging-severity alerts that fired during the owner's own shift.
+  This amended the research doc's "no auto-ack" (§3, 2026-10-31 amendment).
+  Turn `ACK_DRY_RUN` off only after watching one shift handoff in dry run.
+- **The hackathon demo is retired** (2026-11-01, after the submission). Judge
+  changes by their effect on the production path (`irm-poll.sh` ->
+  `investigate.sh` -> outbox -> Slack agent). The demo pieces (NemoClaw sandbox,
+  minikube demo app, Telegram) are left as they are and not maintained; the
+  real mode runs as plain host services and never calls NemoClaw.
+
+## Open
+
+1. **Phase 1 exit test.** Compare each brief's verdict with what on-call did.
+   Pass: no `hold` on an alert that needed someone that night.
+2. **Agent dry run.** Flip `ACK_DRY_RUN=0` after one observed handoff
+   (`deploy/systemd/README.md`, Going live).
+3. **False-alarm pings.** IRM pages before the copilot looks, so only an IRM
+   change stops them: the warning chain holds at night and the copilot pages
+   the real ones (research doc §3, Phase 4). That is a team decision.
+4. **Infra record of the ServiceAccount.** The manifest and the `VIEWER_SA`
+   option for the minting script exist only as a local patch in the
+   operator's `~/.config/oncall-copilot/`. They are not in the infrastructure
+   repository yet, so the identity is live on every cluster with no review record.
+5. **Token renewal, around 2027-01-23.** Cluster tokens: re-run the minting
+   script per cluster (a `CONTEXT=` override exists for clusters whose admin
+   context is not `admin@<cluster>`). The Grafana token: new token on the
+   same service account. Then reinstall both on the host.
+6. **`DC_PROVIDERS` drift.** The private TSV is a copy of the provider table in
+   the team's `file-dc-request` skill. Update both when a cluster or channel changes.
+
+## Traps hit along the way
+
+- Writes to shared clusters and merges are blocked by the auto-mode
+  classifier until the human says so explicitly; sudo on the host needs their
+  password. Give them the exact command and let them run it.
+- In the Claude Code prompt, `!` runs one line typed at the start of a prompt.
+  Several pasted `!` lines in one message, or a `!` sent from the web or phone
+  view, run nothing.
+- The host's login shell is zsh: a glob over a directory the caller cannot
+  read aborts the command. Expand it inside `sudo -u <user> bash -c`.
+- In the operator's interactive shell `rm` and `mv` are aliased to `-i` and
+  hang on a prompt; use `command rm`/`command mv`. Scripts are unaffected.
+- `kubectl auth can-i get pods/log` asks about a pod named `log`; use
+  `--subresource=log`.
+- `jq -r ... | tr -c 'A-Za-z0-9_-' '_'` also turns jq's trailing newline into `_`.
+  Capture the value first, then sanitize it.
+- systemd `EnvironmentFile=` does not expand `$VAR`; the poller's unit sources
+  its env file through bash for that reason.
+- Relative journal windows (`--since -1h`) keep showing a cleared problem.
+  Check how old the newest warning is instead:
+  `journalctl -u oncall-copilot-poll -n 200 -o short-unix | rg 'warn:|error:' | tail -1`.
