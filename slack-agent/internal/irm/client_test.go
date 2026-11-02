@@ -19,11 +19,11 @@ func newServer(t *testing.T) (*httptest.Server, *[]string) {
 		seen = append(seen, r.Method+" "+r.URL.RequestURI()+" auth="+r.Header.Get("Authorization")+" gurl="+r.Header.Get("X-Grafana-URL"))
 		switch {
 		case r.Method == "GET" && r.URL.Path == "/oncall/api/v1/alert_groups/G1":
-			w.Write([]byte(`{"id":"G1","alert_group_number":41,"state":"firing","permalinks":{"slack":"https://s/p41"}}`))
+			w.Write([]byte(`{"id":"G1","alert_group_number":41,"state":"firing","permalinks":{"slack":"https://s/p41","web":"https://w/41"}}`))
 		case r.Method == "GET" && r.URL.Path == "/oncall/api/v1/alert_groups/" && r.URL.Query().Get("page") == "1":
 			w.Write([]byte(`{"next":"p2","results":[{"id":"G7","alert_group_number":7,"state":"firing","permalinks":{"slack":"https://x.slack.com/archives/C1/p100"}}]}`))
 		case r.Method == "GET" && r.URL.Path == "/oncall/api/v1/alert_groups/" && r.URL.Query().Get("page") == "2":
-			w.Write([]byte(`{"next":null,"results":[{"id":"G5474","alert_group_number":5474,"state":"firing","permalinks":{"slack":"https://x.slack.com/archives/C1/p200"},"last_alert":{"payload":{"alerts":[{"labels":{"alertname":"GPU Xid Critical","cluster":"c1","node":"n1"},"startsAt":"2026-10-30T20:00:00Z"}]}}}]}`))
+			w.Write([]byte(`{"next":null,"results":[{"id":"G5474","alert_group_number":5474,"state":"firing","permalinks":{"slack":"https://x.slack.com/archives/C1/p200","web":"https://w/5474"},"last_alert":{"payload":{"alerts":[{"labels":{"alertname":"GPU Xid Critical","cluster":"c1","node":"n1"},"startsAt":"2026-10-30T20:00:00Z"}]}}}]}`))
 		case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/oncall/api/v1/schedules/S1/final_shifts"):
 			w.Write([]byte(`{"results":[{"user_pk":"ME","user_email":"me@x","shift_start":"2026-10-30T15:00:00Z","shift_end":"2026-10-31T15:00:00Z"}]}`))
 		case r.Method == "POST" && r.URL.Path == "/oncall/api/v1/alert_groups/G1/acknowledge":
@@ -51,7 +51,7 @@ func TestReadsAndAcks(t *testing.T) {
 		t.Fatalf("group: %+v %v", g, err)
 	}
 	sh, err := c.FinalShifts(ctx, "S1", time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC), time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC))
-	if err != nil || len(sh) != 1 || sh[0].UserPK != "ME" || !sh[0].End.Equal(time.Date(2026, 10, 31, 15, 0, 0, 0, time.UTC)) {
+	if err != nil || len(sh) != 1 || sh[0].UserPK != "ME" || sh[0].UserEmail != "me@x" || !sh[0].Start.Equal(time.Date(2026, 10, 30, 15, 0, 0, 0, time.UTC)) || !sh[0].End.Equal(time.Date(2026, 10, 31, 15, 0, 0, 0, time.UTC)) {
 		t.Fatalf("shifts: %+v %v", sh, err)
 	}
 	if err := c.Acknowledge(ctx, "G1"); err != nil {
