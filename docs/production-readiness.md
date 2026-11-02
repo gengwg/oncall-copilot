@@ -78,11 +78,11 @@ every verdict. Nobody has scored them yet.
 
 ### A4. Credentials with known expiry dates
 
-Cluster and Grafana tokens expire around 2027-01-23 (status doc, open item 5).
-The agent's IRM token, the Slack app tokens and the model key have no expiry
-recorded anywhere. An expired token fails safe (the poll fails and the
-heartbeat stops) but quietly, because heartbeats go to a channel with no
-escalation.
+Cluster and Grafana tokens expire from 2027-01-23. The inventory is the
+status doc's Credentials section; the agent's IRM token, the Slack app
+tokens and the model key show "none recorded" there. An expired token fails
+safe (the poll fails and the heartbeat stops) but quietly, because
+heartbeats go to a channel with no escalation.
 
 - Add an inventory table to the status doc: each credential, what it can do,
   where it lives on the host, its expiry, and how to renew it. No values.

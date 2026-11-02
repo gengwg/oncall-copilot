@@ -19,4 +19,6 @@ systemctl --user enable --now oncall-slack-agent.service
 systemctl --user restart oncall-slack-agent.service
 sleep 2
 systemctl --user --no-pager status oncall-slack-agent.service | head -12
+# The revision is what a rollback compares against.
+echo "installed: $(git log --oneline -1)$(git diff --quiet HEAD || echo ' + uncommitted changes')"
 echo "logs: journalctl --user -u oncall-slack-agent -f"

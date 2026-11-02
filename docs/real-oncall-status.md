@@ -62,6 +62,30 @@ the operator's admin kubeconfigs, in a sandboxed unit (`ProtectHome`,
   minikube demo app, Telegram) are left as they are and not maintained; the
   real mode runs as plain host services and never calls NemoClaw.
 
+## Credentials
+
+Every secret the two services use, with no values. The poller's env file is
+`/var/lib/oncall-copilot/.config/oncall-copilot/env` (sudo to edit; the timer
+reads it on each run, so no restart). The agent's is
+`~/.config/oncall-copilot/agent.env`; restart the agent after a change.
+
+| Credential | Used by | What it can do | Where | Expires | Renew |
+|---|---|---|---|---|---|
+| Grafana service account token, Viewer | poller | read IRM alert groups; Prometheus through the datasource proxy | poller env `GRAFANA_TOKEN` (also `PROMETHEUS_TOKEN`) | about 2027-01-23 (90 days from Phase 0; not re-checked) | new token on the same service account |
+| Cluster ServiceAccount tokens, one per in-service cluster | poller | get/list nodes, pods, events, namespaces | `<KUBECONFIG_DIR>/<cluster>.kubeconfig` | 2027-01-23 22:51Z to 2027-01-24 03:36Z (read from the token claims, 2026-11-02) | re-run the minting script per cluster (`CONTEXT=` override where the admin context isn't `admin@<cluster>`) |
+| Model key | poller | inference calls, which spend money | poller env `NEBIUS_API_KEY` (name kept from the demo), with `INFERENCE_URL`, `MODEL` | none recorded; a company router key with a shared weekly spend limit | rotate in the router's console (production-readiness A1) |
+| Poller heartbeat URL | poller | ping its IRM heartbeat integration; the secret is in the URL | poller env `HEARTBEAT_URL` | none recorded | regenerate on the IRM integration |
+| IRM personal API token | agent | read alert groups and shifts; ack and unack as the owner (the client allowlists those two writes) | `IRM_PERSONAL_TOKEN` | none recorded | new token in the owner's IRM settings |
+| Slack bot token | agent | DM the owner and read replies | `SLACK_BOT_TOKEN` | none recorded | the Slack app's settings |
+| Slack app-level token | agent | open the Socket Mode connection | `SLACK_APP_TOKEN` | none recorded | the Slack app's settings |
+| Agent heartbeat URL | agent | ping its IRM heartbeat integration | `HEARTBEAT_URL` | none recorded | regenerate on the IRM integration |
+| Claude Code login | agent, DC drafts only | run the DC request skill headless, draft only, behind the runner's deny list | the owner's login on the host (`CLAUDE_BIN`) | login session | log in again on the host; until then the agent replies "DC request not drafted" with the failure reason |
+
+Private but not secret: the `DC_PROVIDERS` TSV, `IRM_SCHEDULE_ID`,
+`ONCALL_ME` and `SLACK_OWNER_ID`. An expired poller token fails safe: the poll
+errors and the heartbeat stops. Heartbeats route to a channel with no
+escalation, so check the earliest date above, not the pager.
+
 ## Open
 
 1. **Phase 1 exit test.** Compare each brief's verdict with what on-call did.
@@ -96,10 +120,9 @@ the operator's admin kubeconfigs, in a sandboxed unit (`ProtectHome`,
    option for the minting script exist only as a local patch in the
    operator's `~/.config/oncall-copilot/`. They are not in the infrastructure
    repository yet, so the identity is live on every cluster with no review record.
-5. **Token renewal, around 2027-01-23.** Cluster tokens: re-run the minting
-   script per cluster (a `CONTEXT=` override exists for clusters whose admin
-   context is not `admin@<cluster>`). The Grafana token: new token on the
-   same service account. Then reinstall both on the host.
+5. **Token renewal, by 2027-01-23.** The Grafana and cluster tokens expire
+   first (see Credentials). Renew both, reinstall them on the host, and set
+   a reminder for two weeks before.
 6. **`DC_PROVIDERS` drift.** The private TSV is a copy of the provider table in
    the team's `file-dc-request` skill. Update both when a cluster or channel changes.
 7. **Remove the legacy outbox keys.** `irm_id`, `irm_number` and `irm_url` are

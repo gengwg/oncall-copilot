@@ -84,3 +84,23 @@ Admin & API > "Create OnCall API token". The agent sends it bare in
 The agent starts with `ACK_DRY_RUN=1` and posts "would ack" in each brief's
 thread. Watch one of the owner's shifts across the 08:00 PT handoff, then set
 `ACK_DRY_RUN=0` and `systemctl --user restart oncall-slack-agent`.
+
+To stop acks at once, set `ACK_DRY_RUN=1` in `agent.env` and restart the
+agent. To undo one ack, reply `unack #<number>` in the agent's DM.
+
+## Updates and rollback
+
+Both installers install what is on main and end with an `installed: <sha>
+<subject>` line. Compare it with `git log --oneline -1 origin/main`.
+
+- Update: merge to main, then deploy the reader before the writer. When a
+  change adds an outbox field, that means the agent first (`git pull --ff-only`
+  in the owner's clone, then `bash deploy/systemd/install-slack-agent.sh`),
+  then `sudo bash /var/lib/oncall-copilot/oncall-copilot/deploy/systemd/install.sh`.
+- Rollback: revert the change on main (`git revert <sha>`, through a PR), then
+  rerun both installers. A branch is never installed, so the revert on main
+  is the rollback. While `install.sh` runs, one timer tick can land between
+  the pull and the unit copy and fail one poll; the next tick is fine.
+- After either, check that both `installed:` lines show the expected commit,
+  `journalctl -u oncall-copilot-poll -n 20` has no `error:` or `bootstrapped`
+  line, and `journalctl --user -u oncall-slack-agent -n 20` has no errors.
