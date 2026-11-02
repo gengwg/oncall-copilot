@@ -1,0 +1,26 @@
+{
+  "irm_id": "S1",
+  "event": {
+    "irm_id": "S1",
+    "irm_number": 501,
+    "irm_url": "https://slack.example/archives/C1/p501",
+    "alertname": "SnapX",
+    "severity": "critical",
+    "cluster": "c30",
+    "node": "gpu-9",
+    "starts_at": "2026-10-25T09:04:00Z",
+    "fault": "unknown",
+    "verdict": "unknown",
+    "failure_mode": "unknown",
+    "degraded": null,
+    "dc_draft": null,
+    "brief": "BRIEF SnapX on c30",
+    "ts": "2026-10-25T09:05:00Z"
+  },
+  "slack_ts": "1761383100.000100",
+  "posted_at": "2026-10-25T09:05:10Z",
+  "post_attempts": 1,
+  "ack_decided": true,
+  "acked_at": "2026-10-25T09:05:11Z",
+  "updated_at": ""
+}

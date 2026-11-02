@@ -230,6 +230,25 @@ set_groups "$(group E4 404 new NoBriefY c22 critical)" "$(group E3 403 new Model
 run_poll OUTBOX_DIR="$OB"
 jq -e '.degraded == "investigation produced no brief" and .brief == ""' "$OB/E4.json" >/dev/null && ok "no brief -> event still written, marked degraded" || bad "no brief -> event still written, marked degraded" "$(cat "$OB/E4.json" 2>&1)"
 
+# 13. Pin the exact line handed to the investigator, the outbox event and the
+#     briefs log header for one firing group, so a provider refactor can prove
+#     it changed none of them. Fresh state so the group counts as new.
+SNAP="$TMP/state-snap"; OB13="$TMP/outbox-snap"
+set_groups "$(group S0 500 resolved SnapOld c30 warning)"
+run_poll STATE_DIR="$SNAP" OUTBOX_DIR="$OB13"
+set_groups "$(group S1 501 firing SnapX c30 critical gpu-9)" "$(group S0 500 resolved SnapOld c30 warning)"
+: > "$TMP/investigated"
+run_poll STATE_DIR="$SNAP" OUTBOX_DIR="$OB13"
+want_line='{"status":"firing","alertname":"SnapX","severity":"critical","summary":"summary SnapX","description":"description SnapX","labels":{"alertname":"SnapX","cluster":"c30","node":"gpu-9","severity":"critical","condition":"GpuXidCritical"},"starts_at":"2026-10-25T09:04:00Z","irm_number":501,"irm_url":"https://slack.example/archives/C1/p501"}'
+got_line=$(tail -n 1 "$TMP/investigated" | jq -S . 2>&1)
+[ "$got_line" = "$(jq -S . <<< "$want_line")" ] && ok "snapshot -> investigated line" || bad "snapshot -> investigated line" "got: $got_line"
+want_ev='{"irm_id":"S1","irm_number":501,"irm_url":"https://slack.example/archives/C1/p501","alertname":"SnapX","severity":"critical","cluster":"c30","node":"gpu-9","starts_at":"2026-10-25T09:04:00Z","fault":"unknown","verdict":"unknown","failure_mode":"unknown","degraded":null,"dc_draft":null}'
+got_ev=$(jq -S 'del(.ts, .brief)' "$OB13/S1.json" 2>&1)
+[ "$got_ev" = "$(jq -S . <<< "$want_ev")" ] && ok "snapshot -> outbox event" || bad "snapshot -> outbox event" "got: $got_ev"
+jq -e '.brief == "BRIEF SnapX on c30" and (.ts | test("^[0-9T:-]+Z$"))' "$OB13/S1.json" >/dev/null && ok "snapshot -> event brief and ts" || bad "snapshot -> event brief and ts" "$(cat "$OB13/S1.json" 2>&1)"
+hdr=$(grep '^=== ' "$SNAP/briefs.log" 2>/dev/null | tail -n 1)
+[[ "$hdr" =~ ^===\ [0-9T:-]+Z\ IRM\ \#501\ S1$ ]] && ok "snapshot -> briefs log header" || bad "snapshot -> briefs log header" "got: $hdr"
+
 echo
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

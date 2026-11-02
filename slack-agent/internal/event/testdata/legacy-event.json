@@ -1,0 +1,17 @@
+{
+  "alertname": "SnapX",
+  "brief": "BRIEF SnapX on c30",
+  "cluster": "c30",
+  "dc_draft": null,
+  "degraded": null,
+  "failure_mode": "unknown",
+  "fault": "unknown",
+  "irm_id": "S1",
+  "irm_number": 501,
+  "irm_url": "https://slack.example/archives/C1/p501",
+  "node": "gpu-9",
+  "severity": "critical",
+  "starts_at": "2026-10-25T09:04:00Z",
+  "ts": "2026-10-25T09:05:00Z",
+  "verdict": "unknown"
+}
