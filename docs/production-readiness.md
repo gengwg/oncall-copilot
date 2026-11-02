@@ -124,7 +124,11 @@ means pages escalate without a brief (safe), and a dead poller means no briefs
 - Keep heartbeats wakeless. Add a line to the 08:05 digest DM when either
   heartbeat was held or missed in the past 24 hours. (Assumption: the agent can
   read the held state; the poller writes it under its state dir.)
-- Exit: stop the poller for an hour, and the next digest says so.
+  Implemented in `slack-agent/internal/health` and `alert-relay/poll.sh`; see
+  `docs/superpowers/plans/2026-11-02-health-in-digest.md`.
+- Exit: stop the poller for an hour, and the next digest says so. Test: stop the
+  poller timer for an hour in a quiet period, restart it, and the next digest
+  reports a gap of about that length.
 
 ## Stage B (needs team decisions)
 

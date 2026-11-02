@@ -15,7 +15,7 @@
 - Heartbeats stay wakeless: no new pages, no new IRM writes, no change to when either service pings.
 - No regression: every existing test in `tests/irm_poll_test.sh` and `slack-agent/...` passes with its expected strings unchanged; the digest's existing text for off-shift briefs is byte-identical when there is no health problem.
 - Fail visibly: if the agent cannot read the poller's files, the digest says "poller health unknown: <reason>" rather than nothing.
-- Poller state files stay bounded: `health.log` is trimmed to its last 500 lines with the other state files at the end of each run.
+- Poller state files stay bounded: `health.log` is trimmed to its last 3000 lines with the other state files at the end of each run. A held or failing poller writes one line per run, about 1440 a day, so 500 lines would lose the day.
 - `health.log` line format: `<UTC RFC3339>\t<kind>\t<detail>`, kind one of `poll-failed`, `ping-failed`, `held`, `gap` (written on the first successful ping after more than 10 minutes without one, with the gap's length and start). Details never contain the heartbeat URL (it holds a secret).
 - jq, if used, must parse on jq 1.7.
 
