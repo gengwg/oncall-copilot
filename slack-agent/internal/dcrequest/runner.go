@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gengwg/oncall-copilot/slack-agent/internal/event"
+	"github.com/gengwg/oncall-copilot/slack-agent/internal/pager"
 )
 
 type Status string
@@ -87,7 +88,7 @@ func Args(prompt, model string) []string {
 func BuildPrompt(ev event.Event) string {
 	link := ev.URL
 	if link == "" {
-		link = fmt.Sprintf("IRM alert group #%s", ev.Ref)
+		link = pager.Label(ev.Pager) + " alert group #" + ev.Ref
 	}
 	return fmt.Sprintf(`Run /file-dc-request for %s (cluster %s, node %s, alert %s) in draft-only mode.
 Rules for this unattended run:

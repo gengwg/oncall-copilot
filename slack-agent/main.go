@@ -50,7 +50,7 @@ func main() {
 		lg.Fatalf("slack: %v", err)
 	}
 	a := &agent.Agent{
-		Outbox: cfg.OutboxDir, Store: store, Poster: slk, IRM: irmc, Shifts: shifts,
+		Outbox: cfg.OutboxDir, Store: store, Poster: slk, Pager: irmc, PagerName: cfg.Pager, Shifts: shifts,
 		Ledger: ledger.New(filepath.Join(cfg.AgentStateDir, "dc-requests.tsv")),
 		Runner: dcrequest.ExecRunner{Bin: cfg.ClaudeBin, Dir: cfg.MetarepoDir, Model: cfg.ClaudeModel, Timeout: 10 * time.Minute},
 		DryRun: cfg.AckDryRun, CollapseMax: cfg.CollapseMax, Log: lg,

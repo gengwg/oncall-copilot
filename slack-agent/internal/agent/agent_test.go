@@ -17,6 +17,7 @@ import (
 	"github.com/gengwg/oncall-copilot/slack-agent/internal/irm"
 	"github.com/gengwg/oncall-copilot/slack-agent/internal/ledger"
 	"github.com/gengwg/oncall-copilot/slack-agent/internal/oncall"
+	"github.com/gengwg/oncall-copilot/slack-agent/internal/pager"
 	"github.com/gengwg/oncall-copilot/slack-agent/internal/slackio"
 )
 
@@ -56,22 +57,22 @@ type fakeIRM struct {
 	findable map[string]irm.Group // ref -> group
 }
 
-func (f *fakeIRM) FindGroup(_ context.Context, ref string) (irm.Group, error) {
+func (f *fakeIRM) Find(_ context.Context, ref string) (pager.Alert, error) {
 	if g, ok := f.findable[ref]; ok {
-		return g, nil
+		return g.Alert(), nil
 	}
-	return irm.Group{}, irm.ErrNotFound
+	return pager.Alert{}, irm.ErrNotFound
 }
 
-func (f *fakeIRM) Group(_ context.Context, id string) (irm.Group, error) {
+func (f *fakeIRM) Get(_ context.Context, id string) (pager.Alert, error) {
 	if f.groupErr != nil {
-		return irm.Group{}, f.groupErr
+		return pager.Alert{}, f.groupErr
 	}
 	st, ok := f.states[id]
 	if !ok {
 		st = "firing"
 	}
-	return irm.Group{ID: id, State: st}, nil
+	return pager.Alert{ID: id, State: st}, nil
 }
 func (f *fakeIRM) Acknowledge(_ context.Context, id string) error {
 	f.acks = append(f.acks, id)
@@ -141,7 +142,7 @@ func newHarness(t *testing.T, shifts []oncall.Shift) *harness {
 	}
 	h := &harness{t: t, poster: &fakePoster{}, irm: &fakeIRM{}, runner: &fakeRunner{res: dcrequest.Result{Status: dcrequest.Drafted, Detail: "#ext-x", CostUSD: 7.25}}, outbox: out}
 	h.a = &Agent{
-		Outbox: out, Store: store, Poster: h.poster, IRM: h.irm, Shifts: fakeShifts{shifts},
+		Outbox: out, Store: store, Poster: h.poster, Pager: h.irm, Shifts: fakeShifts{shifts},
 		Ledger: ledger.New(filepath.Join(dir, "dc.tsv")), Runner: h.runner,
 		CollapseMax: 6, Now: func() time.Time { return now },
 		DigestMarker: filepath.Join(dir, "digest-last"),
@@ -551,5 +552,30 @@ func TestOnShiftBriefsStillPostWithDigestOn(t *testing.T) {
 	h.tick()
 	if len(h.poster.posts) != 1 || len(h.irm.acks) != 1 {
 		t.Fatalf("my shift: posts=%d acks=%v", len(h.poster.posts), h.irm.acks)
+	}
+}
+
+func TestPagerNameFeedsTheText(t *testing.T) {
+	h := newHarness(t, theirShift)
+	h.a.PagerName = "fake"
+	h.irm.findable = map[string]irm.Group{"#77": {ID: "F77", Number: 77, State: "firing"}}
+	ctx := context.Background()
+	h.a.HandleInbound(ctx, slackio.Inbound{TS: "f1", Text: "file #77"})
+	h.a.DrainDC(ctx)
+	if rec := h.rec("F77"); rec.Event.Pager != "fake" || rec.Event.Ref != "77" {
+		t.Fatalf("attached event: %+v", rec.Event)
+	}
+	h.a.DryRun = false
+	h.a.HandleInbound(ctx, slackio.Inbound{ThreadTS: "f1", Text: "ack"})
+	if got := h.poster.lastReply(); got != "f1: Acked fake #77 on your instruction." {
+		t.Fatalf("ack reply: %q", got)
+	}
+	h.a.HandleInbound(ctx, slackio.Inbound{ThreadTS: "f1", Text: "unack"})
+	if got := h.poster.lastReply(); got != "f1: Unacked fake #77; it escalates again." {
+		t.Fatalf("unack reply: %q", got)
+	}
+	h.a.HandleInbound(ctx, slackio.Inbound{TS: "f2", Text: "ack #9999"})
+	if got := h.poster.lastReply(); got != "f2: Could not find that alert: irm: alert group not found" {
+		t.Fatalf("not found reply: %q", got)
 	}
 }

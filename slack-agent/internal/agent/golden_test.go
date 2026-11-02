@@ -83,7 +83,7 @@ func TestAckNotesGolden(t *testing.T) {
 	assertGolden(t, "already acked", tickOne(h, goldenEvent()), "ts1: not acked: already acknowledged")
 
 	h = newHarness(t, myShift)
-	h.a.IRM = alreadyAckedIRM{h.irm}
+	h.a.Pager = alreadyAckedIRM{h.irm}
 	assertGolden(t, "ack race", tickOne(h, goldenEvent()), "ts1: IRM #501 was already acknowledged")
 
 	h = newHarness(t, myShift)

@@ -14,21 +14,33 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gengwg/oncall-copilot/slack-agent/internal/oncall"
+	"github.com/gengwg/oncall-copilot/slack-agent/internal/pager"
 )
 
 // ErrNotAllowed is returned by the transport for any write outside the allowlist.
 var ErrNotAllowed = errors.New("irm: request not in the write allowlist")
 
+// sentinel keeps IRM's own error text, which owners see in DMs, while also
+// matching the pager-level sentinel the agent tests for.
+type sentinel struct {
+	msg    string
+	parent error
+}
+
+func (e *sentinel) Error() string        { return e.msg }
+func (e *sentinel) Is(target error) bool { return target == e.parent }
+
 // ErrNotFound means no recent alert group matched the reference.
-var ErrNotFound = errors.New("irm: alert group not found")
+var ErrNotFound error = &sentinel{"irm: alert group not found", pager.ErrNotFound}
 
 // ErrAlreadyAcked means the group was acknowledged before we got to it. Callers
 // treat it as success: the escalation is already stopped and someone saw it.
-var ErrAlreadyAcked = errors.New("irm: already acknowledged")
+var ErrAlreadyAcked error = &sentinel{"irm: already acknowledged", pager.ErrAlreadyAcked}
 
 var writeAllow = regexp.MustCompile(`^/api/v1/alert_groups/[^/]+/(acknowledge|unacknowledge)/?$`)
 
@@ -147,6 +159,38 @@ func (g Group) StartsAt() string {
 	return g.LastAlert.Payload.Alerts[0].StartsAt
 }
 
+// Alert reduces the group to what the agent uses. Ref is "" when IRM sent no
+// group number.
+func (g Group) Alert() pager.Alert {
+	ref := ""
+	if g.Number != 0 {
+		ref = strconv.Itoa(g.Number)
+	}
+	url := g.Permalinks.Slack
+	if url == "" {
+		url = g.Permalinks.Web
+	}
+	return pager.Alert{ID: g.ID, Ref: ref, URL: url, State: g.State, Labels: g.Labels(), StartsAt: g.StartsAt()}
+}
+
+// Get implements the agent's Pager.
+func (c *Client) Get(ctx context.Context, id string) (pager.Alert, error) {
+	g, err := c.Group(ctx, id)
+	if err != nil {
+		return pager.Alert{}, err
+	}
+	return g.Alert(), nil
+}
+
+// Find implements the agent's Pager.
+func (c *Client) Find(ctx context.Context, ref string) (pager.Alert, error) {
+	g, err := c.FindGroup(ctx, ref)
+	if err != nil {
+		return pager.Alert{}, err
+	}
+	return g.Alert(), nil
+}
+
 var (
 	refNumber    = regexp.MustCompile(`^#?(\d{1,7})$`)
 	refPermalink = regexp.MustCompile(`archives/([A-Z0-9]+)/p(\d+)`)
@@ -219,12 +263,21 @@ func (c *Client) FinalShifts(ctx context.Context, scheduleID string, from, to ti
 		return nil, fmt.Errorf("irm: final_shifts: HTTP %d", code)
 	}
 	var out struct {
-		Results []oncall.Shift `json:"results"`
+		Results []struct {
+			UserPK    string    `json:"user_pk"`
+			UserEmail string    `json:"user_email"`
+			Start     time.Time `json:"shift_start"`
+			End       time.Time `json:"shift_end"`
+		} `json:"results"`
 	}
 	if err := json.Unmarshal(b, &out); err != nil {
 		return nil, err
 	}
-	return out.Results, nil
+	shifts := make([]oncall.Shift, 0, len(out.Results))
+	for _, r := range out.Results {
+		shifts = append(shifts, oncall.Shift{UserPK: r.UserPK, UserEmail: r.UserEmail, Start: r.Start, End: r.End})
+	}
+	return shifts, nil
 }
 
 func (c *Client) action(ctx context.Context, id, verb string) error {
