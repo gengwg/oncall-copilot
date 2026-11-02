@@ -1,11 +1,105 @@
 # OnCall Copilot
 
-A private, always-on AI on-call copilot. It watches your alerts, investigates
-**before** paging you, and sends a Telegram brief with the likely root cause,
-the evidence, and a suggested first action from your own runbooks.
+An on-call copilot for a Grafana IRM rotation. For each new alert it gathers
+the evidence first (the alerting node's conditions and events through a
+read-only cluster identity, metrics and logs through Grafana), asks a model for
+the likely cause, and writes a brief with two calls: **page or hold** (does
+someone need to act before morning) and **real or false alarm**. The owner gets
+the brief as a Slack DM, and a real hardware fault also gets a pre-filled
+request to the datacenter provider. IRM acks are narrow and start in dry run.
 
-Built for the **Nebius x NVIDIA Global AI Hackathon** — **Personal AI track**,
-then extended to a real on-call rotation (see "Real on-call mode").
+It began as a submission to the Nebius x NVIDIA Global AI Hackathon (Personal
+AI track). That demo is retired and kept below for reference.
+
+## Real on-call mode
+
+Two services on one always-on host:
+
+```
+Grafana IRM alert groups --poll (read-only SA token)--> alert-relay/irm-poll.sh
+   (restricted system user, systemd timer)   -> investigate.sh -> brief + DC draft
+                                              -> one JSON event per brief in an outbox
+                                                        |
+                                                        v  (group-readable)
+   slack-agent/ (Go, the owner's user, systemd --user, Socket Mode)
+     -> on the owner's shift: DM the brief, reply in-thread with the ack decision
+     -> on other shifts: hold it; one digest DM per day at 08:05 local
+     -> ack in IRM only on the owner's own shift, only for a `hold` verdict,
+        only after the DM posted; everything else keeps escalating
+     -> real hardware faults: run the /file-dc-request skill headless (draft only)
+     -> owner replies: file, sent, ignore, ack, unack, status; or `file #1234` / `file <card link>`
+     -> pings an IRM heartbeat after each successful scan (optional)
+```
+
+The poller pings its own IRM heartbeat after each successful poll and holds it
+after two degraded briefs in a row (model call failed, or node evidence not
+collected), so a dead or useless service shows up without anyone checking.
+
+Every credential the deployment uses (the Grafana service account, the cluster
+tokens, the IRM token, the Slack app, the model key) belongs to the
+organization running the rotation and lives outside the repo, in
+`~/.config/oncall-copilot/` and the service users' env files. The repo's
+`.env` belongs to the retired demo.
+
+What is live, what was decided and what is still open:
+`docs/real-oncall-status.md`. Why it is shaped this way, and why acks are so
+narrow: `docs/real-oncall-research.md`. Deploy steps and the Slack app
+settings: `deploy/systemd/README.md`. The agent starts in dry run
+(`ACK_DRY_RUN=1`).
+
+## Layout
+
+- `alert-relay/` — `irm-poll.sh` (polls IRM; the real mode) and `investigate.sh`
+  (evidence, model call, brief, report, DC draft; both modes). Node evidence comes
+  from per-cluster read-only kubeconfigs in `KUBECONFIG_DIR`; the Prometheus
+  scenario queries still read the demo-app's `demo_*` series. The Go relay is the
+  demo's Alertmanager webhook → queue
+- `slack-agent/` — the real-on-call Slack side (Go): reads the poller's outbox,
+  DMs each brief to one person, lets them steer by replying (`file`, `sent`, `ignore`,
+  `ack`, `unack`, `status`, or `file #5474` / `file <alert link>` for any alert), acks `hold`-verdict pages during that person's own
+  IRM shift once the brief has reached them (a `page` verdict keeps escalating), and drafts DC hardware requests through the
+  metarepo `/file-dc-request` skill (`deploy/systemd/user/`, `deploy/systemd/install-slack-agent.sh`)
+- `deploy/systemd/` — units and installers for the real mode
+- `skills/` — OpenClaw skills: `promql-query`, `logql-query`; `investigate.sh` runs their query scripts
+- `memory/` — agent knowledge layer (runbooks, incident reports) (demo)
+- `workspace/TOOLS.md` — on-call notes OpenClaw loads into every chat session (demo)
+- `demo-app/` — Go service with a `/chaos` endpoint (latency, errors, memory, CPU) (demo)
+- `deploy/minikube/` — observability stack (Prometheus, Alertmanager, Loki, Grafana, Alloy) (demo)
+- `deploy/dashboard/` — incident dashboard; `-render` writes it as static pages for GitHub Pages
+  (https://gengwg.github.io/oncall-copilot/). `deploy/sync-incidents.sh` pushes each new report to the repo, which republishes the feed (demo)
+- `deploy/policy-local-observability.yaml` — sandbox network policy for Prom/Loki (demo).
+  Apply with `nemoclaw <sb> policy add --from-file deploy/policy-local-observability.yaml
+  --trusted-private-host 172.18.0.1 --yes`; NemoClaw v0.0.123+ refuses RFC1918
+  endpoints without that explicit trust flag
+- `tests/e2e/` — chaos-scenario end-to-end harness (demo)
+- `spike/` — Phase 0 verification (Token Factory, NemoClaw onboarding) (demo)
+- `docs/` — real-mode status and research, architecture, feedback, plan
+
+## Testing
+
+```bash
+# unit + race, one Go module per directory (what CI runs)
+for d in alert-relay demo-app deploy/dashboard slack-agent; do
+  (cd $d && test -z "$(gofmt -l .)" && go vet ./... && go test -race ./...)
+done
+
+# investigator against a real relay + stub Prometheus/Loki/inference
+./tests/investigate_test.sh
+# evidence query scripts and the IRM poller, against stubs
+./tests/query_scripts_test.sh
+./tests/irm_poll_test.sh
+
+# end-to-end on the demo stack: chaos -> alert -> relay -> evidence -> Nemotron RCA -> report
+RELAY_LOG=/tmp/opencode/relay-host.out COPILOT_ASSERT=1 ./tests/e2e/run.sh
+# scenarios: error, latency, memory (all assert the incident report content)
+```
+
+## Hackathon demo (retired)
+
+Built for the **Nebius x NVIDIA Global AI Hackathon** — **Personal AI track**.
+The demo copilot watches your alerts, investigates **before** paging you, and
+sends a Telegram brief with the likely root cause, the evidence, and a
+suggested first action from your own runbooks.
 
 Instead of waking you with a raw alert, the copilot does the first five minutes
 of incident response for you: confirms the alert against live metrics, reads
@@ -15,7 +109,7 @@ it remembers for next time. When you open the page, the root cause is already
 there, and the brief says how long after the failure began it was ready (about
 a minute in the demo).
 
-## Why it's Personal AI
+### Why it's Personal AI
 
 - **Always-on**: a cron automation watches the alert stream every 30s.
 - **Private & sandboxed**: runs inside an NVIDIA OpenShell sandbox with a
@@ -27,7 +121,7 @@ a minute in the demo).
 - **Reusable skills**: `promql-query` and `logql-query` skills work against any
   Prometheus/Loki.
 
-## Stack (how the required pieces are used)
+### Stack (how the required pieces are used)
 
 | Piece | Role |
 |---|---|
@@ -39,7 +133,7 @@ a minute in the demo).
 | **GitHub Pages** | hosts the public incident feed (demo URL): the dashboard rendered as static pages, republished on every new report |
 | Prometheus + Alertmanager + Loki + Grafana + Alloy | local demo observability stack (minikube) |
 
-## Data flow
+### Data flow
 
 ```
 demo-app (/chaos) -> Prometheus alert -> Alertmanager --webhook--> alert-relay
@@ -59,57 +153,7 @@ demo-app (/chaos) -> Prometheus alert -> Alertmanager --webhook--> alert-relay
                                                             (Nebius Serverless)
 ```
 
-## Real on-call mode (beyond the demo)
-
-The same investigation runs against a real Grafana IRM rotation, as two
-services on one always-on host:
-
-```
-Grafana IRM alert groups --poll (read-only SA token)--> alert-relay/irm-poll.sh
-   (restricted system user, systemd timer)   -> investigate.sh -> brief + DC draft
-                                              -> one JSON event per brief in an outbox
-                                                        |
-                                                        v  (group-readable)
-   slack-agent/ (Go, the owner's user, systemd --user, Socket Mode)
-     -> on the owner's shift: DM the brief, reply in-thread with the ack decision
-     -> on other shifts: hold it; one digest DM per day at 08:05 local
-     -> ack in IRM only on the owner's own shift, only for a `hold` verdict,
-        only after the DM posted; everything else keeps escalating
-     -> real hardware faults: run the /file-dc-request skill headless (draft only)
-     -> owner replies: file, sent, ignore, ack, unack, status; or `file #1234` / `file <card link>`
-     -> pings an IRM heartbeat after each successful scan (optional)
-```
-
-Why it is shaped this way, and why acks are so narrow, is in
-`docs/real-oncall-research.md`. Deploy steps and the Slack app settings are in
-`deploy/systemd/README.md`. The agent starts in dry run (`ACK_DRY_RUN=1`).
-
-## Layout
-
-- `demo-app/` — Go service with a `/chaos` endpoint (latency, errors, memory, CPU)
-- `alert-relay/` — Alertmanager webhook → stdout + queue; `investigate.sh` (the loop).
-  Its evidence queries read the demo-app's `demo_*` series; point them at your
-  own service's metrics to reuse it
-- `skills/` — OpenClaw skills: `promql-query`, `logql-query`
-- `memory/` — agent knowledge layer (runbooks, incident reports)
-- `workspace/TOOLS.md` — on-call notes OpenClaw loads into every chat session
-- `deploy/minikube/` — observability stack (Prometheus, Alertmanager, Loki, Grafana, Alloy)
-- `deploy/dashboard/` — incident dashboard; `-render` writes it as static pages for GitHub Pages
-  (https://gengwg.github.io/oncall-copilot/). `deploy/sync-incidents.sh` pushes each new report to the repo, which republishes the feed
-- `deploy/policy-local-observability.yaml` — sandbox network policy for Prom/Loki.
-  Apply with `nemoclaw <sb> policy add --from-file deploy/policy-local-observability.yaml
-  --trusted-private-host 172.18.0.1 --yes`; NemoClaw v0.0.123+ refuses RFC1918
-  endpoints without that explicit trust flag
-- `slack-agent/` — the real-on-call Slack side (Go): reads the poller's outbox,
-  DMs each brief to one person, lets them steer by replying (`file`, `sent`, `ignore`,
-  `ack`, `unack`, `status`, or `file #5474` / `file <alert link>` for any alert), acks `hold`-verdict pages during that person's own
-  IRM shift once the brief has reached them (a `page` verdict keeps escalating), and drafts DC hardware requests through the
-  metarepo `/file-dc-request` skill (`deploy/systemd/user/`, `deploy/systemd/install-slack-agent.sh`)
-- `tests/e2e/` — chaos-scenario end-to-end harness
-- `spike/` — Phase 0 verification (Token Factory, NemoClaw onboarding)
-- `docs/` — architecture, feedback, plan
-
-## Quick start
+### Quick start
 
 Prereqs: Docker, minikube, kubectl, helm, Go, a Nebius Token Factory API key,
 a Tavily API key, and a Telegram bot token + chat id.
@@ -150,26 +194,7 @@ curl "localhost:18080/chaos/stop"
 `stop` tears them down. Start it with an SSH agent that can push to the repo
 in the environment, or the incident sync cannot publish new reports.
 
-## Testing
-
-```bash
-# unit + race, one Go module per directory (what CI runs)
-for d in alert-relay demo-app deploy/dashboard slack-agent; do
-  (cd $d && test -z "$(gofmt -l .)" && go vet ./... && go test -race ./...)
-done
-
-# investigator against a real relay + stub Prometheus/Loki/inference
-./tests/investigate_test.sh
-# evidence query scripts and the IRM poller, against stubs
-./tests/query_scripts_test.sh
-./tests/irm_poll_test.sh
-
-# end-to-end: chaos -> alert -> relay -> evidence -> Nemotron RCA -> report
-RELAY_LOG=/tmp/opencode/relay-host.out COPILOT_ASSERT=1 ./tests/e2e/run.sh
-# scenarios: error, latency, memory (all assert the incident report content)
-```
-
-## How Token Factory / Nemotron accelerated the build
+### How Token Factory / Nemotron accelerated the build
 
 - Token Factory's OpenAI-compatible endpoint dropped straight into NemoClaw's
   `custom` provider — no model-serving work.
