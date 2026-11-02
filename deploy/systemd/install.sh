@@ -23,6 +23,10 @@ AGENT_USER="${AGENT_USER:-${SUDO_USER:-$USER}}"
 sudo install -d -m 750 -o "$U" -g "$U" "$H/outbox"
 id -nG "$AGENT_USER" | tr ' ' '\n' | grep -qx "$U" || sudo usermod -aG "$U" "$AGENT_USER"
 
+# The Slack agent's digest reads health.log and last-ok in the poller's state dir.
+sudo -H -u "$U" mkdir -p "$H/.local/state/oncall-copilot"
+sudo chmod g+rx "$H" "$H/.local" "$H/.local/state" "$H/.local/state/oncall-copilot"
+
 sudo install -m 644 "$SRC/oncall-copilot-poll.service" "$SRC/oncall-copilot-poll.timer" /etc/systemd/system/
 sudo systemctl daemon-reload
 

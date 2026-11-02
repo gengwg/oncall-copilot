@@ -15,7 +15,7 @@
 - Heartbeats stay wakeless: no new pages, no new IRM writes, no change to when either service pings.
 - No regression: every existing test in `tests/irm_poll_test.sh` and `slack-agent/...` passes with its expected strings unchanged; the digest's existing text for off-shift briefs is byte-identical when there is no health problem.
 - Fail visibly: if the agent cannot read the poller's files, the digest says "poller health unknown: <reason>" rather than nothing.
-- Poller state files stay bounded: `health.log` is trimmed to its last 3000 lines with the other state files at the end of each run. A held or failing poller writes one line per run, about 1440 a day, so 500 lines would lose the day.
+- Poller state files stay bounded: `health.log` is trimmed to its last 3000 lines on every write. A held or failing poller writes one line per run, about 1440 a day, so 500 lines would lose the day.
 - `health.log` line format: `<UTC RFC3339>\t<kind>\t<detail>`, kind one of `poll-failed`, `ping-failed`, `held`, `gap` (written on the first successful ping after more than 10 minutes without one, with the gap's length and start). Details never contain the heartbeat URL (it holds a secret).
 - jq, if used, must parse on jq 1.7.
 
@@ -38,7 +38,7 @@
 **Interfaces:**
 - Produces: `$STATE_DIR/health.log` (format above) and `$STATE_DIR/last-ok` (mtime = last successful ping; contents the UTC RFC3339 time). Consumed by Task 2.
 
-- [ ] **Step 1: Failing tests.** New cases: (a) a successful poll with `HEARTBEAT_URL` set updates `last-ok` and writes no `health.log` line; (b) a refused token (`GRAFANA_TOKEN=wrong`) writes one `poll-failed` line containing `HTTP 401` and leaves `last-ok` unchanged; (c) an unreachable heartbeat URL writes one `ping-failed` line; (d) two degraded briefs in a row write a `held` line on the second run; (e) an unknown `ONCALL_PAGER` writes `poll-failed`; (f) with `last-ok` set 30 minutes in the past (`touch -d`), a successful ping writes one `gap` line naming about 30 minutes; with it set 5 minutes in the past, no `gap` line; (g) `health.log` is trimmed to 500 lines; (h) no line ever contains the heartbeat URL. Each line matches `^[0-9T:-]+Z\t(poll-failed|ping-failed|held|gap)\t`.
+- [ ] **Step 1: Failing tests.** New cases: (a) a successful poll with `HEARTBEAT_URL` set updates `last-ok` and writes no `health.log` line; (b) a refused token (`GRAFANA_TOKEN=wrong`) writes one `poll-failed` line containing `HTTP 401` and leaves `last-ok` unchanged; (c) an unreachable heartbeat URL writes one `ping-failed` line; (d) two degraded briefs in a row write a `held` line on the second run; (e) an unknown `ONCALL_PAGER` writes `poll-failed`; (f) with `last-ok` set 30 minutes in the past (`touch -d`), a successful ping writes one `gap` line naming about 30 minutes; with it set 5 minutes in the past, no `gap` line; (g) `health.log` is trimmed to 3000 lines; (h) no line ever contains the heartbeat URL. Each line matches `^[0-9T:-]+Z\t(poll-failed|ping-failed|held|gap)\t`.
 - [ ] **Step 2: Run** `./tests/irm_poll_test.sh` — new cases fail, all old ones pass.
 - [ ] **Step 3: Implement** a `health_event <kind> <detail>` helper (create `$STATE_DIR` first if needed; append one line), call it at each exit and in `heartbeat()`, after a successful `curl`, write a `gap` line if the old `last-ok` is more than 10 minutes old, then write `last-ok`, trim with the other state files.
 - [ ] **Step 4: Run** all four shell suites — pass, old expected strings unchanged.
