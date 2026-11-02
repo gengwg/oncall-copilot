@@ -28,11 +28,30 @@
 set -uo pipefail
 
 ONCALL_PAGER="${ONCALL_PAGER:-irm}"
+STATE_DIR="${STATE_DIR:-$HOME/.local/state/oncall-copilot}"
+
+# Health events for the daily digest, read by another user's agent: one
+# "<UTC time>\t<kind>\t<detail>" line each. Also used before the lock and
+# before the state dir exists, so it makes the dir and takes no lock. Bounded
+# here so every writer keeps the file short. A failed write never changes an
+# exit code. Details must never carry the heartbeat URL (it holds a secret).
+health_event() { # health_event <poll-failed|ping-failed|held|gap> <detail>
+  local f="$STATE_DIR/health.log"
+  mkdir -p "$STATE_DIR" 2>/dev/null || return 0
+  printf '%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" \
+    "$(printf '%s' "$2" | tr '\t\r\n' '   ' | cut -c1-300)" >> "$f" 2>/dev/null || return 0
+  tail -n 500 "$f" > "$f.tmp" 2>/dev/null && mv "$f.tmp" "$f"
+  return 0
+}
+
 ADAPTER="${ONCALL_PAGER_ADAPTER:-$(dirname "$0")/pagers/$ONCALL_PAGER.sh}"
-[ -r "$ADAPTER" ] || { echo "error: no adapter for ONCALL_PAGER=$ONCALL_PAGER" >&2; exit 1; }
+[ -r "$ADAPTER" ] || {
+  echo "error: no adapter for ONCALL_PAGER=$ONCALL_PAGER" >&2
+  health_event poll-failed "no adapter for ONCALL_PAGER=$ONCALL_PAGER"
+  exit 1
+}
 pager_label() { case "$1" in irm) echo IRM ;; *) echo "$1" ;; esac; }
 LABEL=$(pager_label "$ONCALL_PAGER")
-STATE_DIR="${STATE_DIR:-$HOME/.local/state/oncall-copilot}"
 SHADOW_LOG="${SHADOW_LOG:-$STATE_DIR/briefs.log}"
 INVESTIGATE="${INVESTIGATE:-$(dirname "$0")/investigate.sh}"
 STORM_WINDOW_S="${STORM_WINDOW_S:-1800}"
@@ -58,21 +77,64 @@ flock -n 9 || exit 0
 # One alone is usually an upstream blip and only warns. It stays held on quiet
 # polls, which cannot show the cause is fixed, until a later brief is healthy.
 heartbeat() {
-  [ -n "${HEARTBEAT_URL:-}" ] || return 0
   if [ -f "$DEGRADED" ]; then
-    echo "warn: not pinging the heartbeat; latest brief degraded: $(cat "$DEGRADED")" >&2
+    health_event held "$(cat "$DEGRADED")"
+    [ -z "${HEARTBEAT_URL:-}" ] || echo "warn: not pinging the heartbeat; latest brief degraded: $(cat "$DEGRADED")" >&2
     return 0
   fi
-  curl -fsS -m 10 -o /dev/null "$HEARTBEAT_URL" 2>/dev/null \
-    || echo "warn: heartbeat ping failed; $LABEL will alert if pings stay missing" >&2
+  if [ -z "${HEARTBEAT_URL:-}" ]; then
+    mark_ok
+    return 0
+  fi
+  local rc=0
+  curl -fsS -m 10 -o /dev/null "$HEARTBEAT_URL" 2>/dev/null || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    mark_ok
+  else
+    echo "warn: heartbeat ping failed; $LABEL will alert if pings stay missing" >&2
+    health_event ping-failed "curl exit $rc"
+  fi
+}
+
+# last-ok is the last run that succeeded and was not held (with a heartbeat
+# URL, the last successful ping). A stopped poller writes nothing, so the first
+# run back reports the outage as a gap. No previous last-ok (first run after
+# deploy) means no gap to report.
+mark_ok() {
+  local f="$STATE_DIR/last-ok" prev now_s
+  now_s=$(date +%s)
+  if [ -f "$f" ]; then
+    if grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' "$f" 2>/dev/null; then
+      prev=$(date -u -d "$(cat "$f")" +%s 2>/dev/null)
+    fi
+    [ -n "${prev:-}" ] || prev=$(stat -c %Y "$f" 2>/dev/null)
+    if [ -n "$prev" ] && [ $((now_s - prev)) -gt 600 ]; then
+      health_event gap "$(( (now_s - prev) / 60 )) min since $(date -u -d "@$prev" +%Y-%m-%dT%H:%M:%SZ)"
+    fi
+  fi
+  date -u -d "@$now_s" +%Y-%m-%dT%H:%M:%SZ > "$f" 2>/dev/null
+  return 0
 }
 
 # Runs inside the lock, as the fetch always did. A failed adapter must not read
 # as "no new alerts": nothing below runs, so no state changes and no heartbeat.
 body=$(mktemp)
-trap 'rm -f "$body"' EXIT
-bash "$ADAPTER" > "$body" || exit 1
-jq empty "$body" 2>/dev/null || { echo "error: adapter $ONCALL_PAGER printed output that is not JSONL" >&2; exit 1; }
+adapter_err=$(mktemp)
+trap 'rm -f "$body" "$adapter_err"' EXIT
+# The adapter's stderr is replayed unchanged, once it has exited, so the first
+# line can also go into the health event.
+bash "$ADAPTER" > "$body" 2> "$adapter_err" || {
+  rc=$?
+  cat "$adapter_err" >&2
+  health_event poll-failed "adapter $ONCALL_PAGER: $(head -n 1 "$adapter_err" | grep . || echo "exit $rc")"
+  exit 1
+}
+cat "$adapter_err" >&2
+jq empty "$body" 2>/dev/null || {
+  echo "error: adapter $ONCALL_PAGER printed output that is not JSONL" >&2
+  health_event poll-failed "adapter $ONCALL_PAGER printed output that is not JSONL"
+  exit 1
+}
 
 # The first run records what already exists rather than investigating a backlog.
 if [ ! -f "$SEEN" ]; then
