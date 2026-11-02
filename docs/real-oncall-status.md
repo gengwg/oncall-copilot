@@ -71,7 +71,7 @@ reads it on each run, so no restart). The agent's is
 
 | Credential | Used by | What it can do | Where | Expires | Renew |
 |---|---|---|---|---|---|
-| Grafana service account token, Viewer | poller | read IRM alert groups and shifts; Prometheus through the datasource proxy | poller env `GRAFANA_TOKEN` (also `PROMETHEUS_TOKEN`) | about 2027-01-23 (90 days from Phase 0; not re-checked) | new token on the same service account |
+| Grafana service account token, Viewer | poller | read IRM alert groups; Prometheus through the datasource proxy | poller env `GRAFANA_TOKEN` (also `PROMETHEUS_TOKEN`) | about 2027-01-23 (90 days from Phase 0; not re-checked) | new token on the same service account |
 | Cluster ServiceAccount tokens, one per in-service cluster | poller | get/list nodes, pods, events, namespaces | `<KUBECONFIG_DIR>/<cluster>.kubeconfig` | 2027-01-23 22:51Z to 2027-01-24 03:36Z (read from the token claims, 2026-11-02) | re-run the minting script per cluster (`CONTEXT=` override where the admin context isn't `admin@<cluster>`) |
 | Model key | poller | inference calls, which spend money | poller env `NEBIUS_API_KEY` (name kept from the demo), with `INFERENCE_URL`, `MODEL` | none recorded; a company router key with a shared weekly spend limit | rotate in the router's console (production-readiness A1) |
 | Poller heartbeat URL | poller | ping its IRM heartbeat integration; the secret is in the URL | poller env `HEARTBEAT_URL` | none recorded | regenerate on the IRM integration |
@@ -79,7 +79,7 @@ reads it on each run, so no restart). The agent's is
 | Slack bot token | agent | DM the owner and read replies | `SLACK_BOT_TOKEN` | none recorded | the Slack app's settings |
 | Slack app-level token | agent | open the Socket Mode connection | `SLACK_APP_TOKEN` | none recorded | the Slack app's settings |
 | Agent heartbeat URL | agent | ping its IRM heartbeat integration | `HEARTBEAT_URL` | none recorded | regenerate on the IRM integration |
-| Claude Code login | agent, DC drafts only | run the DC request skill headless, draft only, behind the runner's deny list | the owner's login on the host (`CLAUDE_BIN`) | login session | log in again on the host; until then the agent replies "DC request not drafted" |
+| Claude Code login | agent, DC drafts only | run the DC request skill headless, draft only, behind the runner's deny list | the owner's login on the host (`CLAUDE_BIN`) | login session | log in again on the host; until then the agent replies "DC request not drafted" with the failure reason |
 
 Private but not secret: the `DC_PROVIDERS` TSV, `IRM_SCHEDULE_ID`,
 `ONCALL_ME` and `SLACK_OWNER_ID`. An expired poller token fails safe: the poll
