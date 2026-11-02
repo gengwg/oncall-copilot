@@ -579,3 +579,159 @@ func TestPagerNameFeedsTheText(t *testing.T) {
 		t.Fatalf("not found reply: %q", got)
 	}
 }
+
+// Pins the digest DM byte for byte: health reporting must not change it on a
+// healthy day.
+func TestDigestTextIsPinned(t *testing.T) {
+	h := newHarness(t, theirShift)
+	h.a.DigestAt = "08:05"
+	h.a.DigestTZ = time.UTC
+	clock := handoff.Add(2 * time.Hour)
+	h.a.Now = func() time.Time { return clock }
+	h.put(withDraft(ev("G1", 1, "critical", clock)))
+	h.put(ev("G2", 2, "warning", clock))
+	h.tick()
+	clock = clock.Add(24 * time.Hour)
+	h.tick()
+	if len(h.poster.posts) != 1 {
+		t.Fatalf("posts: %q", h.poster.posts)
+	}
+	want := "*Overnight digest: 2 brief(s) on other shifts, none acked by me.*\n" +
+		"• IRM #1 GPU Xid Critical (critical) c1/n-G1 · verdict hold · fault real · DC draft ready: reply `file #1` · https://slack/pG1\n" +
+		"• IRM #2 GPU Xid Critical (warning) c1/n-G2 · verdict hold · fault real · https://slack/pG2\n"
+	if h.poster.posts[0] != want {
+		t.Fatalf("digest text changed:\n got: %q\nwant: %q", h.poster.posts[0], want)
+	}
+}
+
+// --- health in the digest
+
+const healthDigestText = "*Overnight digest: 2 brief(s) on other shifts, none acked by me.*\n" +
+	"• IRM #1 GPU Xid Critical (critical) c1/n-G1 · verdict hold · fault real · DC draft ready: reply `file #1` · https://slack/pG1\n" +
+	"• IRM #2 GPU Xid Critical (warning) c1/n-G2 · verdict hold · fault real · https://slack/pG2\n"
+
+// digestHarness defers two briefs, moves the clock past the next 08:05, and
+// leaves the digest to the caller's next tick. state is the poller's dir.
+func digestHarness(t *testing.T, withBriefs bool) (*harness, *time.Time, string) {
+	t.Helper()
+	h := newHarness(t, theirShift)
+	h.a.DigestAt = "08:05"
+	h.a.DigestTZ = time.UTC
+	clock := handoff.Add(2 * time.Hour)
+	h.a.Now = func() time.Time { return clock }
+	if withBriefs {
+		h.put(withDraft(ev("G1", 1, "critical", clock)))
+		h.put(ev("G2", 2, "warning", clock))
+	}
+	h.tick()
+	clock = clock.Add(24 * time.Hour)
+	dir := t.TempDir()
+	h.a.PollerStateDir = dir
+	return h, &clock, dir
+}
+
+func writeHealth(t *testing.T, dir string, clock time.Time, lastOK time.Time, lines ...string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, "last-ok"), []byte(lastOK.UTC().Format(time.RFC3339)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if lines != nil {
+		if err := os.WriteFile(filepath.Join(dir, "health.log"), []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func marker(h *harness) string {
+	b, _ := os.ReadFile(h.a.DigestMarker)
+	return strings.TrimSpace(string(b))
+}
+
+func TestDigestUnchangedWhenHealthy(t *testing.T) {
+	h, clock, dir := digestHarness(t, true)
+	writeHealth(t, dir, *clock, clock.Add(-time.Minute))
+	h.a.FailedPings = func() int { return 0 }
+	h.tick()
+	if len(h.poster.posts) != 1 || h.poster.posts[0] != healthDigestText {
+		t.Fatalf("posts: %q", h.poster.posts)
+	}
+}
+
+func TestDigestLeadsWithHealthLines(t *testing.T) {
+	h, clock, dir := digestHarness(t, true)
+	bad := clock.Add(-2 * time.Hour).UTC().Format(time.RFC3339)
+	writeHealth(t, dir, *clock, clock.Add(-time.Minute), bad+"\tpoll-failed\tHTTP 401")
+	h.a.FailedPings = func() int { return 3 }
+	h.tick()
+	want := "poller: 1 failed poll in the last 24h (last: " + bad + " poll-failed HTTP 401)\n" +
+		"agent: 3 failed heartbeat pings since the last digest\n" + healthDigestText
+	if len(h.poster.posts) != 1 || h.poster.posts[0] != want {
+		t.Fatalf("got  %q\nwant %q", h.poster.posts, want)
+	}
+	if marker(h) != clock.Format("2006-01-02") {
+		t.Fatalf("marker %q", marker(h))
+	}
+}
+
+func TestDigestAgentPingSingular(t *testing.T) {
+	h, clock, dir := digestHarness(t, false)
+	writeHealth(t, dir, *clock, clock.Add(-time.Minute))
+	h.a.FailedPings = func() int { return 1 }
+	h.tick()
+	if len(h.poster.posts) != 1 || h.poster.posts[0] != "agent: 1 failed heartbeat ping since the last digest\n" {
+		t.Fatalf("posts: %q", h.poster.posts)
+	}
+}
+
+func TestQuietDayWithProblemPostsHealthOnly(t *testing.T) {
+	h, clock, dir := digestHarness(t, false)
+	old := clock.Add(-3 * time.Hour)
+	writeHealth(t, dir, *clock, old)
+	h.tick()
+	want := "poller: no successful run since " + old.UTC().Format(time.RFC3339) + "\n"
+	if len(h.poster.posts) != 1 || h.poster.posts[0] != want {
+		t.Fatalf("got %q", h.poster.posts)
+	}
+	if marker(h) != clock.Format("2006-01-02") {
+		t.Fatalf("marker %q", marker(h))
+	}
+	h.tick()
+	if len(h.poster.posts) != 1 {
+		t.Fatal("once per day")
+	}
+}
+
+func TestQuietDayWithoutProblemPostsNothing(t *testing.T) {
+	h, clock, dir := digestHarness(t, false)
+	writeHealth(t, dir, *clock, clock.Add(-time.Minute))
+	h.a.FailedPings = func() int { return 0 }
+	h.tick()
+	if len(h.poster.posts) != 0 {
+		t.Fatalf("posts: %q", h.poster.posts)
+	}
+	if marker(h) != clock.Format("2006-01-02") {
+		t.Fatalf("marker %q", marker(h))
+	}
+}
+
+func TestDigestSaysWhenHealthIsUnreadable(t *testing.T) {
+	h, clock, _ := digestHarness(t, false)
+	h.a.PollerStateDir = filepath.Join(t.TempDir(), "missing")
+	h.tick()
+	if len(h.poster.posts) != 1 || !strings.HasPrefix(h.poster.posts[0], "poller health unknown: ") {
+		t.Fatalf("posts: %q", h.poster.posts)
+	}
+	_ = clock
+}
+
+func TestFailedPingsResetsOnlyWhenDigestRuns(t *testing.T) {
+	h, clock, dir := digestHarness(t, false)
+	writeHealth(t, dir, *clock, clock.Add(-time.Minute))
+	calls := 0
+	h.a.FailedPings = func() int { calls++; return 0 }
+	h.tick()
+	h.tick() // marker written: not due again, so the count is left to accumulate
+	if calls != 1 {
+		t.Fatalf("FailedPings called %d times", calls)
+	}
+}

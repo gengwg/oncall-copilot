@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -99,6 +100,9 @@ func main() {
 	lg.Printf("started: outbox %s, dry run %v, every %s, heartbeat %v, off-shift digest at %q %s", cfg.OutboxDir, cfg.AckDryRun, cfg.ScanInterval, cfg.HeartbeatURL != "", cfg.DigestAt, cfg.DigestTZ)
 	// Pinged only after a scan that read the outbox, so IRM alerts when the
 	// agent dies, loses the outbox, or stalls. The URL carries a secret: never logged.
+	var failedPings atomic.Int64
+	a.PollerStateDir = cfg.PollerStateDir
+	a.FailedPings = func() int { return int(failedPings.Swap(0)) }
 	heartbeat := func() {
 		if cfg.HeartbeatURL == "" {
 			return
@@ -108,11 +112,13 @@ func main() {
 		req, _ := http.NewRequestWithContext(hctx, http.MethodGet, cfg.HeartbeatURL, nil)
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
+			failedPings.Add(1)
 			lg.Printf("heartbeat ping failed: %v", err)
 			return
 		}
 		resp.Body.Close()
 		if resp.StatusCode >= 300 {
+			failedPings.Add(1)
 			lg.Printf("heartbeat ping: HTTP %d", resp.StatusCode)
 		}
 	}
