@@ -15,7 +15,7 @@
 # alert.labels already has customer removed. On a failed fetch it prints one
 # "error: ..." line to stderr and exits non-zero; empty output means no groups.
 #
-# Env: PAGER (default irm) picks $(dirname "$0")/pagers/$PAGER.sh, PAGER_ADAPTER
+# Env: ONCALL_PAGER (default irm) picks $(dirname "$0")/pagers/$ONCALL_PAGER.sh, ONCALL_PAGER_ADAPTER
 #      overrides the path (tests). Provider settings are the adapter's: see pagers/.
 #      STATE_DIR (default ~/.local/state/oncall-copilot), SHADOW_LOG,
 #      INVESTIGATE (default investigate.sh next to this script),
@@ -27,11 +27,11 @@
 # Usage: poll.sh   (run every 30-60s from a timer)
 set -uo pipefail
 
-PAGER="${PAGER:-irm}"
-ADAPTER="${PAGER_ADAPTER:-$(dirname "$0")/pagers/$PAGER.sh}"
-[ -r "$ADAPTER" ] || { echo "error: no adapter for PAGER=$PAGER" >&2; exit 1; }
+ONCALL_PAGER="${ONCALL_PAGER:-irm}"
+ADAPTER="${ONCALL_PAGER_ADAPTER:-$(dirname "$0")/pagers/$ONCALL_PAGER.sh}"
+[ -r "$ADAPTER" ] || { echo "error: no adapter for ONCALL_PAGER=$ONCALL_PAGER" >&2; exit 1; }
 pager_label() { case "$1" in irm) echo IRM ;; *) echo "$1" ;; esac; }
-LABEL=$(pager_label "$PAGER")
+LABEL=$(pager_label "$ONCALL_PAGER")
 STATE_DIR="${STATE_DIR:-$HOME/.local/state/oncall-copilot}"
 SHADOW_LOG="${SHADOW_LOG:-$STATE_DIR/briefs.log}"
 INVESTIGATE="${INVESTIGATE:-$(dirname "$0")/investigate.sh}"
@@ -72,7 +72,7 @@ heartbeat() {
 body=$(mktemp)
 trap 'rm -f "$body"' EXIT
 bash "$ADAPTER" > "$body" || exit 1
-jq empty "$body" 2>/dev/null || { echo "error: adapter $PAGER printed output that is not JSONL" >&2; exit 1; }
+jq empty "$body" 2>/dev/null || { echo "error: adapter $ONCALL_PAGER printed output that is not JSONL" >&2; exit 1; }
 
 # The first run records what already exists rather than investigating a backlog.
 if [ ! -f "$SEEN" ]; then
@@ -126,7 +126,7 @@ for g in "${groups[@]}"; do
   fi
 
   # The relay's line shape, built from the group's firing alert.
-  line=$(printf '%s' "$g" | jq -c --arg pager "$PAGER" --arg label "$LABEL" \
+  line=$(printf '%s' "$g" | jq -c --arg pager "$ONCALL_PAGER" --arg label "$LABEL" \
     '{status: "firing"} + .alert + {pager: $pager, label: $label, ref, url}')
   # Two different checks. The same alert on the same node is one problem. The
   # same alert on other nodes is separate hardware and gets its own brief, up

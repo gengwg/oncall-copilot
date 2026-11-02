@@ -97,7 +97,7 @@ set_groups() { # set_groups <group-json>...: newest first, as IRM lists them
 run_poll() { # run_poll [env assignments...]; sets OUT/ERR/RC
   local out err
   out=$(mktemp); err=$(mktemp)
-  env -u PAGER IRM_API_URL="http://127.0.0.1:$PORT" GRAFANA_URL=https://stack.example GRAFANA_TOKEN="$TOKEN" \
+  env IRM_API_URL="http://127.0.0.1:$PORT" GRAFANA_URL=https://stack.example GRAFANA_TOKEN="$TOKEN" \
       STATE_DIR="$TMP/state" INVESTIGATE="$TMP/investigate.sh" "$@" \
       bash "$ROOT/alert-relay/${POLL_SCRIPT:-poll.sh}" > "$out" 2> "$err"
   RC=$?
@@ -281,18 +281,26 @@ fake_line() { # fake_line <id> <ref>
 }
 S16="$TMP/state-fake"; OB16="$TMP/outbox-fake"
 fake_line F0 70 > "$FAKE_OUT"
-run_poll STATE_DIR="$S16" OUTBOX_DIR="$OB16" PAGER=fake PAGER_ADAPTER="$TMP/fake.sh"
+run_poll STATE_DIR="$S16" OUTBOX_DIR="$OB16" ONCALL_PAGER=fake ONCALL_PAGER_ADAPTER="$TMP/fake.sh"
 { fake_line F0 70; fake_line F1 77; } > "$FAKE_OUT"
 : > "$TMP/investigated"
-run_poll STATE_DIR="$S16" OUTBOX_DIR="$OB16" PAGER=fake PAGER_ADAPTER="$TMP/fake.sh"
+run_poll STATE_DIR="$S16" OUTBOX_DIR="$OB16" ONCALL_PAGER=fake ONCALL_PAGER_ADAPTER="$TMP/fake.sh"
 check "fake adapter -> log names the provider and ref" "fake #77" "$(cat "$S16/briefs.log" 2>&1)"
 jq -e '.pager == "fake" and .id == "F1" and .ref == "77" and .url == "https://pager.example/77" and (has("irm_id") | not) and (has("irm_number") | not)' "$OB16/F1.json" >/dev/null && ok "fake adapter -> event has pager keys, no irm_ keys" || bad "fake adapter -> event has pager keys, no irm_ keys" "$(cat "$OB16/F1.json" 2>&1)"
 jq -e '.label == "fake" and .pager == "fake" and .ref == "77"' <<< "$(tail -n 1 "$TMP/investigated")" >/dev/null && ok "fake adapter -> investigated line carries label" || bad "fake adapter -> investigated line carries label" "$(cat "$TMP/investigated")"
 
 # 17. An unknown pager is a configuration error, not an empty poll.
-run_poll STATE_DIR="$TMP/state-nope" PAGER=nope
+run_poll STATE_DIR="$TMP/state-nope" ONCALL_PAGER=nope
 [ "$RC" -eq 1 ] && ok "unknown pager -> exit 1" || bad "unknown pager -> exit 1" "rc=$RC"
-check "unknown pager -> says so on stderr" "no adapter for PAGER=nope" "$ERR"
+check "unknown pager -> says so on stderr" "no adapter for ONCALL_PAGER=nope" "$ERR"
+
+# 18. A shell's own PAGER (less, bat...) must not select the adapter.
+S18="$TMP/state-shellpager"
+set_groups "$(group P1 601 acknowledged NvlinkDown c40 warning)"
+run_poll STATE_DIR="$S18" PAGER=less
+set_groups "$(group P2 602 new GpuFellOff c40 critical)" "$(group P1 601 acknowledged NvlinkDown c40 warning)"
+run_poll STATE_DIR="$S18" PAGER=less
+check "shell PAGER=less -> irm adapter still used" "IRM #602" "$(cat "$S18/briefs.log" 2>&1)"
 
 echo
 echo "$PASS passed, $FAIL failed"
