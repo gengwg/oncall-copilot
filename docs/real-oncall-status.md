@@ -12,7 +12,7 @@ channels, IDs) stay out of this public repo. They live in the operator's
 
 | Service | State | Writes |
 |---|---|---|
-| Poller (`alert-relay/irm-poll.sh`, systemd timer, every 60 s) | live, shadow mode | briefs log, outbox, DC drafts |
+| Poller (`alert-relay/poll.sh`, IRM adapter, systemd timer, every 60 s) | live, shadow mode | briefs log, outbox, DC drafts |
 | Slack agent (`slack-agent/`, user service) | live, `ACK_DRY_RUN=1` | Slack DMs, "would ack" notes |
 
 The poller reads Grafana IRM alert groups with a Viewer token, investigates
@@ -57,7 +57,7 @@ the operator's admin kubeconfigs, in a sandboxed unit (`ProtectHome`,
   This amended the research doc's "no auto-ack" (§3, 2026-10-31 amendment).
   Turn `ACK_DRY_RUN` off only after watching one shift handoff in dry run.
 - **The hackathon demo is retired** (2026-11-01, after the submission). Judge
-  changes by their effect on the production path (`irm-poll.sh` ->
+  changes by their effect on the production path (`poll.sh` ->
   `investigate.sh` -> outbox -> Slack agent). The demo pieces (NemoClaw sandbox,
   minikube demo app, Telegram) are left as they are and not maintained; the
   real mode runs as plain host services and never calls NemoClaw.
@@ -81,6 +81,10 @@ the operator's admin kubeconfigs, in a sandboxed unit (`ProtectHome`,
    same service account. Then reinstall both on the host.
 6. **`DC_PROVIDERS` drift.** The private TSV is a copy of the provider table in
    the team's `file-dc-request` skill. Update both when a cluster or channel changes.
+7. **Remove the legacy outbox keys.** `irm_id`, `irm_number` and `irm_url` are
+   still written next to `pager`, `id`, `ref` and `url`
+   (`docs/pager-adapters.md`). Drop them in one small PR after the poller and
+   the agent have both run two weeks on the pager-boundary release with no skew errors.
 
 ## Traps hit along the way
 

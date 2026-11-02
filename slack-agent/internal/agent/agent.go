@@ -111,7 +111,7 @@ func (a *Agent) Tick(ctx context.Context) error {
 	if a.DigestAt != "" {
 		if _, mine := a.Shifts.Mine(a.now()); !mine {
 			// Someone else's shift: hold the briefs for the digest. Nothing is
-			// acked for them anyway, and the on-call is paged by IRM as usual.
+			// acked for them anyway, and the pager pages the on-call as usual.
 			for _, ev := range fresh {
 				rec := &event.Record{ID: ev.ID, Event: ev, Deferred: true, AckDecided: true,
 					DeferredAt: a.now().UTC().Format(time.RFC3339),

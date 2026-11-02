@@ -36,7 +36,7 @@ minikube (demo env)
 ## Real on-call path (since v1.4.0)
 
 ```
-IRM alert groups -> irm-poll.sh (timer, restricted user, read-only token)
+IRM alert groups -> poll.sh (pagers/irm.sh) (timer, restricted user, read-only token)
   seen/storm/repeat filters -> investigate.sh -> brief, incident report, DC draft file
   -> $OUTBOX_DIR/<irm_id>.json  (tmp+rename; skipped groups emit nothing)
 
