@@ -399,9 +399,12 @@ set_groups "$(group H5b 911 new ModelDownB c72 critical)" "$(group H5a 910 new M
 run_poll STATE_DIR="$H5" HEARTBEAT_URL="$HB21"
 [ "$(hcount "$H5")" = 1 ] && check "health: two degraded in a row -> held line with the reason" "held	" "$(hlog "$H5")" || bad "health: two degraded in a row -> held line" "$(hlog "$H5")"
 check "health: held line carries the reason" "model call failed" "$(hlog "$H5")"
-H5b_ok=$(cat "$H5/last-ok" 2>/dev/null)
+# Seeded 30 min old so an advance (or a gap line) cannot hide in the same second.
+ago 30 "$H5/last-ok"; H5b_ok=$(cat "$H5/last-ok")
+gaps_before=$(grep -c '	gap	' "$H5/health.log")
 run_poll STATE_DIR="$H5" HEARTBEAT_URL="$HB21"
-[ "$(cat "$H5/last-ok" 2>/dev/null)" = "$H5b_ok" ] && ok "health: held -> last-ok not advanced" || bad "health: held -> last-ok not advanced" "$(cat "$H5/last-ok" 2>&1)"
+[ "$(cat "$H5/last-ok")" = "$H5b_ok" ] && ok "health: held -> last-ok not advanced" || bad "health: held -> last-ok not advanced" "$(cat "$H5/last-ok" 2>&1)"
+[ "$(grep -c '	gap	' "$H5/health.log")" = "$gaps_before" ] && ok "health: held -> no gap line" || bad "health: held -> no gap line" "$(hlog "$H5")"
 
 # (e) An unknown pager is a poll-failed line, even though the state dir does not exist yet.
 H6="$TMP/state-h6-new"
@@ -441,6 +444,13 @@ H12="$TMP/state-h12"
 set_groups "$(group H0 900 acknowledged Old c70 warning)"
 run_poll STATE_DIR="$H12" HEARTBEAT_URL="$HB21"
 [ -s "$H12/last-ok" ] && [ ! -s "$H12/health.log" ] && ok "health: first run after deploy -> last-ok, no gap" || bad "health: first run after deploy -> last-ok, no gap" "$(hlog "$H12")"
+
+# A broken state dir (health.log or last-ok is a directory) adds nothing to stderr.
+H14="$TMP/state-h14"; mk_state "$H14"; mkdir "$H14/health.log" "$H14/last-ok"
+run_poll STATE_DIR="$H14" HEARTBEAT_URL="$HB21"
+[ "$RC" -eq 0 ] && [ -z "$ERR" ] && ok "health: unwritable health files -> silent, exit 0" || bad "health: unwritable health files -> silent, exit 0" "rc=$RC err=$ERR"
+run_poll STATE_DIR="$H14" HEARTBEAT_URL="http://127.0.0.1:9/heartbeat/x"
+[ "$RC" -eq 0 ] && lacks "health: unwritable health.log on a failed ping -> no extra stderr" "directory" "$ERR" || bad "health: failed ping with broken state -> exit 0" "rc=$RC"
 
 # (g) health.log is trimmed to its last 3000 lines.
 H13="$TMP/state-h13"; mk_state "$H13"
