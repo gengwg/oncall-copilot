@@ -12,13 +12,17 @@
 # false-page? (page, resolved, nobody acted), open (nobody acted, not resolved),
 # unknown (lookup failed; never counted as ok).
 #
+# Valid only for periods when ACK_DRY_RUN=1 held: live copilot acks use the
+# owner's personal token and show as the owner, so any live-ack period makes
+# page-ok too high and the false-page rate too low.
+#
 # Output goes to the operator's terminal only: it carries alert titles and links.
 # stdout: one tab-separated row per brief, then a blank line and the summary.
 #   ts ref id verdict night acted min_to_action state category title url
 #
 # Env: IRM_API_URL, IRM_TOKEN (required), GRAFANA_URL (required for a glsa_ token).
-#      Auth as slack-agent/internal/irm/client.go: glsa_ is Bearer + X-Grafana-URL,
-#      anything else is sent bare.
+#      Auth as slack-agent/internal/irm/client.go: glsa_ is sent as Bearer, anything
+#      else bare; X-Grafana-URL goes with either whenever GRAFANA_URL is set.
 # Usage: score-verdicts.sh [briefs-log]   (default $STATE_DIR/briefs.log)
 set -uo pipefail
 
@@ -29,30 +33,39 @@ LOG="${1:-$STATE_DIR/briefs.log}"
 [ -n "${IRM_TOKEN:-}" ] || { echo "error: IRM_TOKEN is not set" >&2; exit 1; }
 if [ "${IRM_TOKEN#glsa_}" != "$IRM_TOKEN" ]; then
   [ -n "${GRAFANA_URL:-}" ] || { echo "error: GRAFANA_URL is not set (needed for a glsa_ token)" >&2; exit 1; }
-  AUTH=(-H "Authorization: Bearer $IRM_TOKEN" -H "X-Grafana-URL: $GRAFANA_URL")
+  AUTH=(-H "Authorization: Bearer $IRM_TOKEN")
 else
   AUTH=(-H "Authorization: $IRM_TOKEN")
 fi
+[ -z "${GRAFANA_URL:-}" ] || AUTH+=(-H "X-Grafana-URL: $GRAFANA_URL")
 
 T=$(mktemp -d)
 trap 'rm -rf "$T"' EXIT
 
-# NULs become newlines, not nothing: a header that shares a line with the NUL
-# block still starts its own line. An entry is a well-formed header; the last
-# Verdict: line wins. The header count goes to a file so a dropped entry shows.
-tr '\000' '\n' < "$LOG" | awk -v hdrs="$T/hdrs" '
+# Every NUL run is an entry boundary (a marker line), and a NUL run also ends the
+# line before it, so a header after one still starts its own line. An entry is a
+# well-formed header; the last Verdict: line wins. Verdict: lines that arrive
+# with no entry open are counted: a NUL block may have eaten their header.
+# The counts go to a file so a dropped entry or a gap shows in the summary.
+LC_ALL=C tr -s '\000' '\001' < "$LOG" | LC_ALL=C sed 's/\x01/\n\x01\n/g' | awk -v counts="$T/counts" '
   function flush() { if (open) print ts "\t" ref "\t" id "\t" v; open = 0 }
+  $0 == "\001" { flush(); blocks++; next }
   /^=== / { flush(); n++
             if (NF >= 5 && $4 ~ /^#/) { ts = $2; ref = substr($4, 2); id = $5; v = "page"; open = 1 }
             next }
-  open && /^Verdict: / { w = tolower($2); gsub(/[^a-z]/, "", w); v = (w == "hold") ? "hold" : "page" }
-  END { flush(); print n + 0 > hdrs }
+  /^Verdict: / { if (!open) { outside++; next } w = tolower($2); gsub(/[^a-z]/, "", w); v = (w == "hold") ? "hold" : "page" }
+  END { flush(); print n + 0, blocks + 0, outside + 0 > counts }
 ' > "$T/entries"
 
 # created_at has fractional seconds, which fromdateiso8601 rejects.
 CLASSIFY='
   def epoch: sub("\\.[0-9]+"; "") | fromdateiso8601;
-  (if (.state | type) == "string" and (.created_at | type) == "string" then . else error("malformed group") end)
+  def strornull: . == null or type == "string";
+  . as $g
+  | (if ($g | type) == "object" and (.state | type) == "string" and (.created_at | type) == "string"
+        and (["acknowledged_by", "acknowledged_at", "resolved_by", "resolved_at"]
+             | all(. as $k | ($g | has($k)) and ($g[$k] | strornull)))
+     then . else error("malformed group") end)
   | (.created_at | epoch) as $c
   | ((.acknowledged_by != null) or (.resolved_by != null)) as $acted
   | ([(if .acknowledged_by != null then .acknowledged_at else empty end),
@@ -86,7 +99,7 @@ done < "$T/entries" > "$T/rows"
 
 cat "$T/rows"
 echo
-awk -F'\t' -v hdrs="$(cat "$T/hdrs")" '
+awk -F'\t' -v cnt="$(cat "$T/counts")" '
   function counts(n,   s, i) {
     for (i = 1; i <= nc; i++) s = s (i > 1 ? "  " : "") cats[i] "=" n[cats[i]] + 0
     return s
@@ -96,11 +109,14 @@ awk -F'\t' -v hdrs="$(cat "$T/hdrs")" '
     return d ? sprintf("%d/%d (%.0f%%)", n["false-page?"], d, 100 * n["false-page?"] / d) : "n/a (no page briefs with an outcome)"
   }
   BEGIN { nc = split("MISS? hold-ok page-ok false-page? open unknown", cats, " ") }
-  { all[$9]++; total++
+  BEGIN { split(cnt, c, " ") }
+  { all[$9]++; total++; ids[$3]++
     if ($5 == "yes") { night[$9]++; nightn++ }
     if ($9 == "MISS?") miss[++m] = $1 "  #" $2 "  " ($7 == "" ? "?" : $7) " min  " $10 "  " $11 }
   END {
-    printf "entries parsed: %d, headers seen: %d%s\n", total, hdrs, (total == hdrs ? "" : "  WARNING: entries were dropped")
+    for (k in ids) distinct++
+    printf "entries parsed: %d (distinct ids: %d), headers seen: %d%s\n", total, distinct, c[1], (total == c[1] ? "" : "  WARNING: entries were dropped")
+    printf "NUL blocks: %d, verdict lines outside an entry: %d%s\n", c[2], c[3], (c[3] > 0 ? "  WARNING: the evidence has a gap" : "")
     print "all:   " counts(all)
     print "       false-page rate " rate(all)
     printf "night: %s  (%d briefs; unknown rows have no night flag)\n", counts(night), nightn

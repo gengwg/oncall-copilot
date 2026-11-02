@@ -10,6 +10,7 @@ TMP=$(mktemp -d)
 free_port() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()'; }
 BEARER_PORT=$(free_port)
 BARE_PORT=$(free_port)
+BAREURL_PORT=$(free_port)
 GLSA=glsa_test-token
 PLAIN=plain-test-token
 
@@ -37,7 +38,8 @@ lacks() { # lacks <name> <unexpected-substring> <actual>
 }
 
 # Serves $TMP/groups/<id>.json; 401 unless the auth headers match the mode
-# (bearer: Bearer + X-Grafana-URL; bare: the token alone). Logs every request,
+# (bearer: Bearer + X-Grafana-URL; bareurl: the bare token + X-Grafana-URL;
+# bare: the token alone). A <id>.status file makes it answer that code with the body. Logs every request,
 # and answers any method but GET with 405 after logging it.
 cat > "$TMP/stub.py" <<'EOF'
 import os, sys
@@ -51,8 +53,11 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         self.note()
         got = self.headers.get("Authorization")
+        gurl = self.headers.get("X-Grafana-URL")
         if mode == "bearer":
-            good = got == "Bearer " + token and self.headers.get("X-Grafana-URL") == "https://grafana.test"
+            good = got == "Bearer " + token and gurl == "https://grafana.test"
+        elif mode == "bareurl":
+            good = got == token and gurl == "https://grafana.test"
         else:
             good = got == token and not self.headers.get("X-Grafana-URL")
         if not good:
@@ -61,7 +66,9 @@ class H(BaseHTTPRequestHandler):
         path = os.path.join(groups, name + ".json")
         if not self.path.startswith("/api/v1/alert_groups/") or not os.path.exists(path):
             self.send_response(404); self.end_headers(); return
-        self.send_response(200); self.end_headers()
+        st = path[:-5] + ".status"   # optional: serve the body with another status
+        code = int(open(st).read()) if os.path.exists(st) else 200
+        self.send_response(code); self.end_headers()
         self.wfile.write(open(path, "rb").read())
     def other(self):
         self.note(); self.send_response(405); self.end_headers()
@@ -70,12 +77,14 @@ class H(BaseHTTPRequestHandler):
 HTTPServer(("127.0.0.1", port), H).serve_forever()
 EOF
 mkdir -p "$TMP/groups"
-: > "$TMP/req-bearer"; : > "$TMP/req-bare"
+: > "$TMP/req-bearer"; : > "$TMP/req-bare"; : > "$TMP/req-bareurl"
 python3 "$TMP/stub.py" "$BEARER_PORT" bearer "$GLSA" "$TMP/groups" "$TMP/req-bearer" &
 STUB_PIDS=$!
 python3 "$TMP/stub.py" "$BARE_PORT" bare "$PLAIN" "$TMP/groups" "$TMP/req-bare" &
 STUB_PIDS="$STUB_PIDS $!"
-for p in "$BEARER_PORT" "$BARE_PORT"; do
+python3 "$TMP/stub.py" "$BAREURL_PORT" bareurl "$PLAIN" "$TMP/groups" "$TMP/req-bareurl" &
+STUB_PIDS="$STUB_PIDS $!"
+for p in "$BEARER_PORT" "$BARE_PORT" "$BAREURL_PORT"; do
   for _ in $(seq 50); do
     curl -s -o /dev/null "http://127.0.0.1:$p/" && break
     sleep 0.1
@@ -116,6 +125,24 @@ add W1 "$P" none
 echo '{"id":"GW1","created_at":"2026-10-30T12:00:00Z"}' > "$TMP/groups/GW1.json"
 add W2 "$P" none
 echo '{"id":"GW2","created_at":"2026-10-30T12:00:00Z","state":7}' > "$TMP/groups/GW2.json"
+add W3 "$H" none
+echo '{"id":"GW3","state":"resolved","created_at":"2026-11-02T10:00:00Z","title":"t"}' > "$TMP/groups/GW3.json"
+add W4 "$H" none
+echo '{"id":"GW4","state":"resolved","created_at":"2026-11-02T10:00:00Z","acknowledged_by":7,"acknowledged_at":null,"resolved_by":null,"resolved_at":null}' > "$TMP/groups/GW4.json"
+add W5 "$H" none
+echo '{"id":"GW5","state":"resolved","created_at":20261102,"acknowledged_by":null,"acknowledged_at":null,"resolved_by":null,"resolved_at":null}' > "$TMP/groups/GW5.json"
+# A valid group body behind HTTP 500 must not be believed.
+add S5 "$H" 2026-11-02T10:00:00Z acknowledged '"U5"' '"2026-11-02T10:05:00Z"'
+echo 500 > "$TMP/groups/GS5.status"
+# Garbled verdict words read as page.
+add V1 'Verdict: holding - x\n' none
+add V2 'Verdict: h0ld - x\n' none
+# One id briefed twice stays two entries.
+add DUP "$P" none
+add DUP "$P" none
+# Text, then NULs with no newline before them, then a header: NULs must not glue them.
+printf 'dangling text with no newline' >> "$LOG"; head -c 2 /dev/zero >> "$LOG"
+add Z1 "$P" none
 # Night boundaries (PST, after the 2026-11-01 DST change): 21:59 no, 22:00 yes, 07:59 yes, 08:00 no.
 add B1 "$H" 2026-11-03T05:59:00Z resolved null null null '"2026-11-03T06:30:00Z"'
 add B2 "$H" 2026-11-03T06:00:00Z resolved null null null '"2026-11-03T06:30:00Z"'
@@ -128,8 +155,9 @@ add B6 "$H" 2026-11-01T05:00:00Z resolved null null null '"2026-11-01T06:30:00Z"
 add D1 "$H" 2026-11-01T08:30:00Z resolved null null null '"2026-11-01T09:00:00Z"'
 add D2 "$H" 2026-11-01T09:30:00Z resolved null null null '"2026-11-01T10:00:00Z"'
 
-# The header for N1 exists but its group file doesn't: 404, same as U1.
-HEADERS=$(tr '\000' '\n' < "$LOG" | grep -c '^=== ')
+# Counted by hand: 29 briefs in the log above (N1's group file is missing: 404, same as U1).
+HEADERS=29
+DISTINCT=28
 
 run_bearer() { IRM_API_URL="http://127.0.0.1:$BEARER_PORT/" IRM_TOKEN="$GLSA" GRAFANA_URL=https://grafana.test "$@"; }
 run_bare()   { IRM_API_URL="http://127.0.0.1:$BARE_PORT" IRM_TOKEN="$PLAIN" env -u GRAFANA_URL "$@"; }
@@ -154,6 +182,15 @@ cat_of N1 'unknown'
 cat_of J1 'unknown'
 cat_of W1 'unknown'
 cat_of W2 'unknown'
+cat_of W3 'unknown'
+cat_of W4 'unknown'
+cat_of W5 'unknown'
+cat_of S5 'unknown'
+cat_of Z1 'unknown'
+check "V1 (holding) reads as page" "page" "$(col V1 4)"
+check "V2 (h0ld) reads as page" "page" "$(col V2 4)"
+DUPROWS=$(col DUP 3 | grep -c GDUP)
+[ "$DUPROWS" = 2 ] && ok "a twice-briefed id keeps both entries" || bad "a twice-briefed id keeps both entries" "$DUPROWS rows"
 check "P3 (no Verdict line) reads as page" "page" "$(col P3 4)"
 check "P4 (hold then page) last verdict wins" "page" "$(col P4 4)"
 check "H1 is a night brief (02:00 PST)" "yes" "$(col H1 5)"
@@ -163,7 +200,7 @@ check "H1 row carries the slack link" "https://slack.test/GH1" "$(col H1 11)"
 check "H1 row carries the title" "title GH1" "$(col H1 10)"
 empty() { [ -z "$(col "$2" "$3")" ] && ok "$1" || bad "$1" "expected empty, got: $(col "$2" "$3")"; }
 empty "P2 (auto-resolved) has no minutes" P2 7
-check "P2 night (22:30 PDT)" "yes" "$(col P2 5)"
+check "P2 night (22:30 PST)" "yes" "$(col P2 5)"
 check "H2 is not night (13:00 PST)" "no" "$(col H2 5)"
 empty "unknown rows leave night empty" U1 5
 
@@ -177,14 +214,16 @@ check "MISS? list names H1" "#H1  12 min  title GH1  https://slack.test/GH1" "$O
 check "MISS? list has one entry" "MISS? (1)" "$OUT"
 check "false-page rate counts P2 over page-ok + false-page?" "false-page rate 1/4 (25%)" "$OUT"
 check "night-only counts" "night: MISS?=1  hold-ok=5" "$OUT"
-PARSED=$(printf '%s\n' "$OUT" | sed -n 's/^entries parsed: \([0-9]*\), headers seen: \([0-9]*\).*/\1 \2/p')
+PARSED=$(printf '%s\n' "$OUT" | sed -n 's/^entries parsed: \([0-9]*\) (distinct ids: [0-9]*), headers seen: \([0-9]*\).*/\1 \2/p')
 check "summary header count equals the log's" "$HEADERS $HEADERS" "$PARSED"
+check "distinct ids shown next to entries parsed" "entries parsed: $HEADERS (distinct ids: $DISTINCT), headers seen: $HEADERS" "$OUT"
+check "NUL blocks counted, none outside an entry" "NUL blocks: 3, verdict lines outside an entry: 0" "$OUT"
 lacks "no drop warning on a clean log" "WARNING" "$OUT"
 
 # A header that cannot be parsed is not silently dropped from the count.
 printf '=== garbled header\nVerdict: hold - x\n\n' > "$TMP/garbled.log"
 add_out=$(run_bearer ./alert-relay/score-verdicts.sh "$TMP/garbled.log" 2>&1)
-check "garbled header is flagged" "entries parsed: 0, headers seen: 1  WARNING" "$add_out"
+check "garbled header is flagged" "entries parsed: 0 (distinct ids: 0), headers seen: 1  WARNING" "$add_out"
 
 # Requests: GET only, one per brief, and the right auth for each token kind.
 check "bearer token sent as Bearer" "auth=Bearer $GLSA grafana=https://grafana.test" "$(cat "$TMP/req-bearer")"
@@ -194,8 +233,29 @@ NONGET=$(grep -vc '^GET ' "$TMP/req-bearer")
 REQS=$(grep -c "^GET /api/v1/alert_groups/" "$TMP/req-bearer")
 [ "$REQS" = "$HEADERS" ] && ok "one request per brief" || bad "one request per brief" "$REQS requests for $HEADERS briefs"
 
+# A NUL block that ate a header must not let its orphaned Verdict: line rewrite the
+# previous entry (here: hold, human acked, so MISS?; a page verdict would hide it).
+MAIN_LOG=$LOG; LOG="$TMP/gap.log"; : > "$LOG"
+add A1 "$H" 2026-11-02T10:00:00Z acknowledged '"U1"' '"2026-11-02T10:12:30Z"'
+head -c 300 /dev/zero >> "$LOG"; printf 'Verdict: page - z\n' >> "$LOG"
+LOG=$MAIN_LOG
+GAP_OUT=$(run_bearer ./alert-relay/score-verdicts.sh "$TMP/gap.log" 2>&1)
+check "orphaned verdict after NULs leaves A1 as MISS?" "MISS? (1)" "$GAP_OUT"
+check "gap summary counts the NUL block and the stray verdict" "NUL blocks: 1, verdict lines outside an entry: 1" "$GAP_OUT"
+check "gap run warns the evidence has a gap" "WARNING" "$GAP_OUT"
+
+# An id outside [A-Za-z0-9_-] is unknown and no request is made for it.
+printf '=== 2026-11-02T20:00:00Z IRM #I1 a/b\n=== 2026-11-02T20:00:00Z IRM #I2 x?y\n' > "$TMP/badid.log"
+BEFORE=$(wc -l < "$TMP/req-bearer")
+ID_OUT=$(run_bearer ./alert-relay/score-verdicts.sh "$TMP/badid.log" 2>&1)
+check "ids with / or ? are unknown" "unknown=2" "$ID_OUT"
+[ "$(wc -l < "$TMP/req-bearer")" = "$BEFORE" ] && ok "no request for an invalid id" || bad "no request for an invalid id" "request log grew"
+
 BARE_OUT=$(run_bare ./alert-relay/score-verdicts.sh "$LOG" 2>&1)
-check "bare token sent without Bearer or X-Grafana-URL" "auth=$PLAIN grafana=None" "$(cat "$TMP/req-bare")"
+check "bare token without GRAFANA_URL sends no X-Grafana-URL" "auth=$PLAIN grafana=None" "$(cat "$TMP/req-bare")"
+BAREURL_OUT=$(IRM_API_URL="http://127.0.0.1:$BAREURL_PORT" IRM_TOKEN="$PLAIN" GRAFANA_URL=https://grafana.test ./alert-relay/score-verdicts.sh "$LOG" 2>&1)
+check "bare token with GRAFANA_URL sends it, not as Bearer" "auth=$PLAIN grafana=https://grafana.test" "$(cat "$TMP/req-bareurl")"
+check "bare token + GRAFANA_URL run classifies H1" "MISS?" "$BAREURL_OUT"
 lacks "bare token run is not rejected" "unknown	" "$(printf '%s\n' "$BARE_OUT" | awk -F'\t' '$2 == "H1"')"
 check "bare run classifies H1" "MISS?" "$BARE_OUT"
 
@@ -203,7 +263,7 @@ check "bare run classifies H1" "MISS?" "$BARE_OUT"
 BAD_OUT=$(IRM_API_URL="http://127.0.0.1:$BARE_PORT" IRM_TOKEN=wrong ./alert-relay/score-verdicts.sh "$LOG" 2>&1); BAD_RC=$?
 [ "$BAD_RC" = 0 ] && ok "401s do not change the exit code" || bad "401s do not change the exit code" "rc=$BAD_RC"
 check "401 run: every brief unknown" "unknown=$HEADERS" "$BAD_OUT"
-lacks "401 run: nothing counted as hold-ok" "hold-ok=1" "$BAD_OUT"
+check "401 run: nothing counted as hold-ok" "hold-ok=0" "$BAD_OUT"
 
 # Config errors.
 ERR=$(env -u IRM_TOKEN IRM_API_URL=http://x ./alert-relay/score-verdicts.sh "$LOG" 2>&1); RC=$?
