@@ -678,7 +678,7 @@ func TestDigestAgentPingSingular(t *testing.T) {
 	writeHealth(t, dir, *clock, clock.Add(-time.Minute))
 	h.a.FailedPings = func() int { return 1 }
 	h.tick()
-	if len(h.poster.posts) != 1 || h.poster.posts[0] != "agent: 1 failed heartbeat ping since the last digest\n" {
+	if len(h.poster.posts) != 1 || h.poster.posts[0] != "*Health:*\nagent: 1 failed heartbeat ping since the last digest\n" {
 		t.Fatalf("posts: %q", h.poster.posts)
 	}
 }
@@ -688,7 +688,7 @@ func TestQuietDayWithProblemPostsHealthOnly(t *testing.T) {
 	old := clock.Add(-3 * time.Hour)
 	writeHealth(t, dir, *clock, old)
 	h.tick()
-	want := "poller: no successful run since " + old.UTC().Format(time.RFC3339) + "\n"
+	want := "*Health:*\npoller: no healthy run since " + old.UTC().Format(time.RFC3339) + "\n"
 	if len(h.poster.posts) != 1 || h.poster.posts[0] != want {
 		t.Fatalf("got %q", h.poster.posts)
 	}
@@ -718,7 +718,7 @@ func TestDigestSaysWhenHealthIsUnreadable(t *testing.T) {
 	h, clock, _ := digestHarness(t, false)
 	h.a.PollerStateDir = filepath.Join(t.TempDir(), "missing")
 	h.tick()
-	if len(h.poster.posts) != 1 || !strings.HasPrefix(h.poster.posts[0], "poller health unknown: ") {
+	if len(h.poster.posts) != 1 || !strings.HasPrefix(h.poster.posts[0], "*Health:*\npoller health unknown: ") {
 		t.Fatalf("posts: %q", h.poster.posts)
 	}
 	_ = clock
@@ -733,5 +733,73 @@ func TestFailedPingsResetsOnlyWhenDigestRuns(t *testing.T) {
 	h.tick() // marker written: not due again, so the count is left to accumulate
 	if calls != 1 {
 		t.Fatalf("FailedPings called %d times", calls)
+	}
+}
+
+// pingCounter behaves like main.go's counters.
+type pingCounter struct{ failed, skipped int }
+
+func (c *pingCounter) wire(a *Agent) {
+	a.FailedPings = func() int { n := c.failed; c.failed = 0; return n }
+	a.SkippedPings = func() int { n := c.skipped; c.skipped = 0; return n }
+	a.RestorePings = func(f, s int) { c.failed += f; c.skipped += s }
+}
+
+func TestFailedPostKeepsPingCountsForTheNextAttempt(t *testing.T) {
+	for _, withBriefs := range []bool{false, true} {
+		h, clock, dir := digestHarness(t, withBriefs)
+		writeHealth(t, dir, *clock, clock.Add(-time.Minute))
+		c := &pingCounter{failed: 2, skipped: 3}
+		c.wire(h.a)
+		h.poster.fail = true
+		h.tick()
+		if c.failed != 2 || c.skipped != 3 {
+			t.Fatalf("briefs=%v: counts after failed post: %+v", withBriefs, *c)
+		}
+		if marker(h) == clock.Format("2006-01-02") {
+			t.Fatalf("briefs=%v: marker written after a failed post", withBriefs)
+		}
+		h.poster.fail = false
+		h.tick()
+		if len(h.poster.posts) != 1 || !strings.Contains(h.poster.posts[0], "agent: 2 failed and 3 skipped heartbeat pings since the last digest\n") {
+			t.Fatalf("briefs=%v: retry posts %q", withBriefs, h.poster.posts)
+		}
+		if c.failed != 0 || c.skipped != 0 {
+			t.Fatalf("briefs=%v: counts after delivery: %+v", withBriefs, *c)
+		}
+	}
+}
+
+func TestDigestPingWording(t *testing.T) {
+	for _, tc := range []struct {
+		failed, skipped int
+		want            string
+	}{
+		{3, 0, "agent: 3 failed heartbeat pings since the last digest\n"},
+		{0, 3, "agent: 3 skipped heartbeat pings since the last digest\n"},
+		{0, 1, "agent: 1 skipped heartbeat ping since the last digest\n"},
+		{2, 3, "agent: 2 failed and 3 skipped heartbeat pings since the last digest\n"},
+		{3, 1, "agent: 3 failed and 1 skipped heartbeat ping since the last digest\n"},
+	} {
+		h, clock, dir := digestHarness(t, false)
+		writeHealth(t, dir, *clock, clock.Add(-time.Minute))
+		c := &pingCounter{failed: tc.failed, skipped: tc.skipped}
+		c.wire(h.a)
+		h.tick()
+		if len(h.poster.posts) != 1 || h.poster.posts[0] != "*Health:*\n"+tc.want {
+			t.Fatalf("%+v: got %q", tc, h.poster.posts)
+		}
+	}
+}
+
+func TestDigestWithBriefsKeepsItsHeader(t *testing.T) {
+	h, clock, dir := digestHarness(t, true)
+	writeHealth(t, dir, *clock, clock.Add(-time.Minute))
+	c := &pingCounter{skipped: 1}
+	c.wire(h.a)
+	h.tick()
+	want := "agent: 1 skipped heartbeat ping since the last digest\n" + healthDigestText
+	if len(h.poster.posts) != 1 || h.poster.posts[0] != want {
+		t.Fatalf("got %q", h.poster.posts)
 	}
 }

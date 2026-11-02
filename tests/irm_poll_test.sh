@@ -439,6 +439,18 @@ H11="$TMP/state-h11"; mk_state "$H11"; ago 62 "$H11/last-ok"
 run_poll STATE_DIR="$H11" HEARTBEAT_URL=
 check "health: no heartbeat URL -> gap line too" "gap	62 min since " "$(hlog "$H11")"
 
+# A slow but healthy run is not a gap: last-ok 595 s old plus an 8 s adapter ends
+# 603 s later, but the poller was only absent for 595 s.
+printf '#!/usr/bin/env bash\nsleep 8\nexec bash "%s/alert-relay/pagers/irm.sh"\n' "$ROOT" > "$TMP/slow.sh"
+H15="$TMP/state-h15"; mk_state "$H15"
+t=$(date -u -d "595 seconds ago" +%Y-%m-%dT%H:%M:%SZ); printf '%s\n' "$t" > "$H15/last-ok"
+run_poll STATE_DIR="$H15" HEARTBEAT_URL="$HB21" ONCALL_PAGER=slow ONCALL_PAGER_ADAPTER="$TMP/slow.sh"
+[ "$RC" -eq 0 ] && [ ! -s "$H15/health.log" ] && ok "health: slow healthy run -> no gap line" || bad "health: slow healthy run -> no gap line" "rc=$RC $(hlog "$H15")"
+# A real stop still shows, whatever the run's own length.
+H16="$TMP/state-h16"; mk_state "$H16"; ago 30 "$H16/last-ok"
+run_poll STATE_DIR="$H16" HEARTBEAT_URL="$HB21" ONCALL_PAGER=slow ONCALL_PAGER_ADAPTER="$TMP/slow.sh"
+check "health: real stop with a slow run -> gap line" "gap	30 min since " "$(hlog "$H16")"
+
 # (i) A fresh state dir's first successful run has no previous last-ok, so no gap.
 H12="$TMP/state-h12"
 set_groups "$(group H0 900 acknowledged Old c70 warning)"

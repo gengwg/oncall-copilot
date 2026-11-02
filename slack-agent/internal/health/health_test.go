@@ -63,7 +63,7 @@ func TestFreshLastOKAndNoLogIsQuiet(t *testing.T) {
 func TestStaleLastOK(t *testing.T) {
 	old := ts(11 * time.Minute)
 	got := Poller(state(t, old, nil), now)
-	if got != "poller: no successful run since "+old {
+	if got != "poller: no healthy run since "+old {
 		t.Fatalf("got %q", got)
 	}
 	if got := Poller(state(t, ts(10*time.Minute), nil), now); got != "" {
@@ -136,6 +136,41 @@ func TestGapCoveringAHoldIsTheHold(t *testing.T) {
 	}
 }
 
+// A token expiry or failed pings end the same way as a hold: the first good
+// run back writes a gap over the whole stop.
+func TestGapCoveringFailedPollsOrPingsIsThatProblem(t *testing.T) {
+	for _, tc := range []struct{ kind, detail, want string }{
+		{"poll-failed", "HTTP 401", "poller: 3 failed polls in the last 24h (last: "},
+		{"ping-failed", "curl exit 28", "poller: 3 failed pings in the last 24h (last: "},
+	} {
+		lines := []string{
+			line(3*time.Hour, tc.kind, tc.detail),
+			line(3*time.Hour-time.Minute, tc.kind, tc.detail),
+			line(3*time.Hour-2*time.Minute, tc.kind, tc.detail),
+			line(2*time.Hour+45*time.Minute, "gap", "17 min since "+ts(3*time.Hour+2*time.Minute)),
+		}
+		got := Poller(state(t, ts(time.Minute), lines), now)
+		if !strings.HasPrefix(got, tc.want) || strings.Contains(got, "gap") {
+			t.Fatalf("%s: got %q", tc.kind, got)
+		}
+	}
+}
+
+// Problem lines outside a gap's span do not explain it: nothing reported while
+// the poller was stopped.
+func TestGapWithNoProblemLineInItsSpanIsAGap(t *testing.T) {
+	lines := []string{
+		line(8*time.Hour, "poll-failed", "HTTP 401"),
+		line(5*time.Hour, "ping-failed", "curl exit 28"),
+		line(2*time.Hour, "gap", "62 min since "+ts(3*time.Hour+2*time.Minute)),
+	}
+	got := Poller(state(t, ts(time.Minute), lines), now)
+	want := "poller: 1 failed poll, 1 failed ping, 1 gap (longest 62 min) in the last 24h (last: " + ts(2*time.Hour) + " gap 62 min since " + ts(3*time.Hour+2*time.Minute) + ")"
+	if got != want {
+		t.Fatalf("got  %q\nwant %q", got, want)
+	}
+}
+
 func TestHoldStillGoingHasNoDuration(t *testing.T) {
 	d := state(t, ts(time.Minute), []string{line(2*time.Minute, "held", "x"), line(time.Minute, "held", "x")})
 	got := Poller(d, now)
@@ -175,7 +210,7 @@ func TestStaleAndEventsBothReported(t *testing.T) {
 	d := state(t, old, []string{line(3*time.Hour, "poll-failed", "HTTP 401")})
 	got := Poller(d, now)
 	parts := strings.Split(got, "\n")
-	if len(parts) != 2 || parts[0] != "poller: no successful run since "+old || !strings.HasPrefix(parts[1], "poller: 1 failed poll in the last 24h") {
+	if len(parts) != 2 || parts[0] != "poller: no healthy run since "+old || !strings.HasPrefix(parts[1], "poller: 1 failed poll in the last 24h") {
 		t.Fatalf("got %q", got)
 	}
 }

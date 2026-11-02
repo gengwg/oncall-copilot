@@ -27,6 +27,9 @@
 # Usage: poll.sh   (run every 30-60s from a timer)
 set -uo pipefail
 
+# A gap is time the poller was not running, so it is measured from here, not
+# from when a slow run ends.
+run_start=$(date +%s)
 ONCALL_PAGER="${ONCALL_PAGER:-irm}"
 STATE_DIR="${STATE_DIR:-$HOME/.local/state/oncall-copilot}"
 
@@ -100,7 +103,8 @@ heartbeat() {
 # last-ok is the last run that succeeded and was not held (with a heartbeat
 # URL, the last successful ping). A stopped poller writes nothing, so the first
 # run back reports the outage as a gap. No previous last-ok (first run after
-# deploy) means no gap to report.
+# deploy) means no gap to report. A long run (a burst of briefs) is not a gap:
+# only the time before it started counts.
 mark_ok() {
   local f="$STATE_DIR/last-ok" prev now_s
   now_s=$(date +%s)
@@ -109,8 +113,8 @@ mark_ok() {
       prev=$(date -u -d "$(cat "$f")" +%s 2>/dev/null)
     fi
     [ -n "${prev:-}" ] || prev=$(stat -c %Y "$f" 2>/dev/null)
-    if [ -n "$prev" ] && [ $((now_s - prev)) -gt 600 ]; then
-      health_event gap "$(( (now_s - prev) / 60 )) min since $(date -u -d "@$prev" +%Y-%m-%dT%H:%M:%SZ)"
+    if [ -n "$prev" ] && [ $((run_start - prev)) -gt 600 ]; then
+      health_event gap "$(( (run_start - prev) / 60 )) min since $(date -u -d "@$prev" +%Y-%m-%dT%H:%M:%SZ)"
     fi
   fi
   { date -u -d "@$now_s" +%Y-%m-%dT%H:%M:%SZ > "$f"; } 2>/dev/null

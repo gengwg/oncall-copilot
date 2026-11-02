@@ -37,7 +37,7 @@ func Poller(dir string, now time.Time) string {
 	case err != nil:
 		out = append(out, "poller health unknown: "+err.Error())
 	case now.Sub(lastOK) > staleAfter:
-		out = append(out, "poller: no successful run since "+lastOK.UTC().Format(time.RFC3339))
+		out = append(out, "poller: no healthy run since "+lastOK.UTC().Format(time.RFC3339))
 	}
 	events, err := readLog(dir)
 	if err != nil {
@@ -89,14 +89,9 @@ func readLog(dir string) ([]event, error) {
 }
 
 func summarize(evs []event, now time.Time) string {
-	// A hold is only recognised by its held lines, wherever they fall, so a
-	// gap that spans one is not counted as a separate outage.
-	var held []time.Time
-	for _, e := range evs {
-		if e.kind == "held" {
-			held = append(held, e.at)
-		}
-	}
+	// A gap is a stop only when no run reported inside its span. The first
+	// healthy run after a hold, a token expiry or failed pings writes a gap
+	// covering it, and that gap is the same problem, not a second outage.
 	var polls, pings, runs, gaps, longest, holdMin int
 	var last *event
 	for i, e := range evs {
@@ -112,8 +107,10 @@ func summarize(evs []event, now time.Time) string {
 			runs++
 		case "gap":
 			mins, since := parseGap(e.detail)
-			if coversHold(held, since, e.at) {
-				holdMin += mins
+			if covers, hold := covered(evs, since, e.at); covers {
+				if hold {
+					holdMin += mins
+				}
 				continue
 			}
 			gaps++
@@ -160,16 +157,20 @@ func parseGap(detail string) (mins int, since time.Time) {
 	return mins, since
 }
 
-func coversHold(held []time.Time, since, end time.Time) bool {
+// covered reports whether a problem line lies inside [since, end], and whether
+// one of them is a hold, whose length is the hold's duration.
+func covered(evs []event, since, end time.Time) (covers, hold bool) {
 	if since.IsZero() {
-		return false
+		return false, false
 	}
-	for _, h := range held {
-		if !h.Before(since) && !h.After(end) {
-			return true
+	for _, e := range evs {
+		if e.kind == "gap" || e.at.Before(since) || e.at.After(end) {
+			continue
 		}
+		covers = true
+		hold = hold || e.kind == "held"
 	}
-	return false
+	return covers, hold
 }
 
 func plural(n int, noun string) string {
