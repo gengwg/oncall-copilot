@@ -17,7 +17,7 @@ import (
 func goldenEvent() event.Event {
 	draft := "/drafts/S1.md"
 	return event.Event{
-		IRMID: "S1", IRMNumber: 501, IRMURL: "https://slack.example/archives/C1/p501",
+		ID: "S1", Ref: "501", URL: "https://slack.example/archives/C1/p501",
 		Alertname: "SnapX", Severity: "critical", Cluster: "c30", Node: "gpu-9",
 		StartsAt: now.Add(-10 * time.Minute).Format(time.RFC3339),
 		Fault:    "real", Verdict: "hold", FailureMode: "hardware", DCDraft: &draft,
@@ -48,7 +48,7 @@ func TestBuildPromptGolden(t *testing.T) {
 		"- Otherwise gather the evidence the skill asks for, write the request in the skill's format, and create it as a Slack draft in the provider channel with slack_send_message_draft. Then output exactly one line \"RESULT: DRAFTED <channel name>\".\n"+
 		"- If you cannot finish for any reason, output exactly one line \"RESULT: FAILED <short reason>\".\n"+
 		"The RESULT line must be the last line of your reply.")
-	ev.IRMURL = ""
+	ev.URL = ""
 	assertGolden(t, "BuildPrompt without URL", dcrequest.BuildPrompt(ev), "Run /file-dc-request for IRM alert group #501 (cluster c30, node gpu-9, alert SnapX) in draft-only mode.\n"+
 		"Rules for this unattended run:\n"+
 		"- Do not cordon, label, taint or drain anything, and do not change any system. If the skill says to cordon, write that the human must decide on the cordon in the request text instead.\n"+

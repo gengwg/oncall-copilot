@@ -15,11 +15,11 @@ type Entry struct {
 	TS      time.Time
 	Cluster string
 	Node    string
-	IRMID   string
+	ID      string
 	Status  string // drafted | sent | already_sent | ignored | failed
 }
 
-// Ledger is an append-only TSV: ts, cluster, node, irm_id, status.
+// Ledger is an append-only TSV: ts, cluster, node, id, status.
 type Ledger struct {
 	path string
 	mu   sync.Mutex
@@ -36,7 +36,7 @@ func (l *Ledger) Append(e Entry) error {
 	}
 	defer f.Close()
 	_, err = fmt.Fprintf(f, "%s\t%s\t%s\t%s\t%s\n",
-		e.TS.UTC().Format(time.RFC3339), e.Cluster, e.Node, e.IRMID, e.Status)
+		e.TS.UTC().Format(time.RFC3339), e.Cluster, e.Node, e.ID, e.Status)
 	return err
 }
 
@@ -62,7 +62,7 @@ func (l *Ledger) All() ([]Entry, error) {
 		if err != nil {
 			continue
 		}
-		out = append(out, Entry{TS: ts, Cluster: p[1], Node: p[2], IRMID: p[3], Status: p[4]})
+		out = append(out, Entry{TS: ts, Cluster: p[1], Node: p[2], ID: p[3], Status: p[4]})
 	}
 	return out, sc.Err()
 }

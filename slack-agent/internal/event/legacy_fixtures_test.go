@@ -17,7 +17,7 @@ func TestLegacyFixturesDecode(t *testing.T) {
 	if err := json.Unmarshal(raw, &ev); err != nil {
 		t.Fatalf("legacy event: %v", err)
 	}
-	if ev.IRMID != "S1" || ev.IRMNumber != 501 {
+	if ev.ID != "S1" || ev.Ref != "501" {
 		t.Fatalf("legacy event: %+v", ev)
 	}
 
@@ -29,7 +29,7 @@ func TestLegacyFixturesDecode(t *testing.T) {
 	if err := json.Unmarshal(raw, &rec); err != nil {
 		t.Fatalf("legacy record: %v", err)
 	}
-	if rec.IRMID != "S1" || rec.Event.IRMID != "S1" || rec.Event.IRMNumber != 501 {
+	if rec.ID != "S1" || rec.Event.ID != "S1" || rec.Event.Ref != "501" {
 		t.Fatalf("legacy record: %+v", rec)
 	}
 	if rec.SlackTS == "" || rec.PostedAt == "" || !rec.AckDecided || rec.AckedAt == "" {

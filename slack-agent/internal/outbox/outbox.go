@@ -33,7 +33,7 @@ func Scan(dir string) ([]event.Event, error) {
 			continue
 		}
 		var ev event.Event
-		if err := json.Unmarshal(b, &ev); err != nil || ev.IRMID == "" {
+		if err := json.Unmarshal(b, &ev); err != nil || ev.ID == "" {
 			bad = append(bad, filepath.Base(n))
 			continue
 		}
@@ -43,7 +43,7 @@ func Scan(dir string) ([]event.Event, error) {
 		if out[i].TS != out[j].TS {
 			return out[i].TS < out[j].TS
 		}
-		return out[i].IRMID < out[j].IRMID
+		return out[i].ID < out[j].ID
 	})
 	if len(bad) > 0 {
 		return out, fmt.Errorf("outbox: %d unreadable event(s): %v", len(bad), bad)

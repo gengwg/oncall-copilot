@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -91,7 +92,7 @@ func (a *Agent) Tick(ctx context.Context) error {
 	var fresh []event.Event
 	var pending []event.Event
 	for _, ev := range events {
-		rec, err := a.Store.Get(ev.IRMID)
+		rec, err := a.Store.Get(ev.ID)
 		if err != nil {
 			return err
 		}
@@ -107,7 +108,7 @@ func (a *Agent) Tick(ctx context.Context) error {
 			// Someone else's shift: hold the briefs for the digest. Nothing is
 			// acked for them anyway, and the on-call is paged by IRM as usual.
 			for _, ev := range fresh {
-				rec := &event.Record{IRMID: ev.IRMID, Event: ev, Deferred: true, AckDecided: true,
+				rec := &event.Record{ID: ev.ID, Event: ev, Deferred: true, AckDecided: true,
 					DeferredAt: a.now().UTC().Format(time.RFC3339),
 					AckNote:    "not acked: not your shift; held for the morning digest"}
 				if err := a.Store.Save(rec); err != nil {
@@ -134,7 +135,7 @@ func (a *Agent) Tick(ctx context.Context) error {
 	}
 	for _, ev := range append(fresh, pending...) {
 		if err := a.HandleEvent(ctx, ev); err != nil {
-			a.logf("event %s: %v", ev.IRMID, err)
+			a.logf("event %s: %v", ev.ID, err)
 		}
 	}
 	return scanErr
@@ -183,12 +184,12 @@ func (a *Agent) digest(ctx context.Context) error {
 		fmt.Fprintf(&b, "*Overnight digest: %d brief(s) on other shifts, none acked by me.*\n", len(recs))
 		for _, r := range recs {
 			ev := r.Event
-			fmt.Fprintf(&b, "• IRM #%d %s (%s) %s/%s · verdict %s · fault %s", ev.IRMNumber, ev.Alertname, ev.Severity, orDash(ev.Cluster), orDash(ev.Node), ev.Verdict, ev.Fault)
+			fmt.Fprintf(&b, "• IRM #%s %s (%s) %s/%s · verdict %s · fault %s", ev.Ref, ev.Alertname, ev.Severity, orDash(ev.Cluster), orDash(ev.Node), ev.Verdict, ev.Fault)
 			if ev.DCDraft != nil {
-				fmt.Fprintf(&b, " · DC draft ready: reply `file #%d`", ev.IRMNumber)
+				fmt.Fprintf(&b, " · DC draft ready: reply `file #%s`", ev.Ref)
 			}
-			if ev.IRMURL != "" {
-				b.WriteString(" · " + ev.IRMURL)
+			if ev.URL != "" {
+				b.WriteString(" · " + ev.URL)
 			}
 			b.WriteString("\n")
 		}
@@ -211,7 +212,7 @@ func (a *Agent) collapse(ctx context.Context, evs []event.Event) error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "*%d briefs in the last %s; summarised, none acked.*\n", len(evs), collapseWindow)
 	for _, ev := range evs {
-		fmt.Fprintf(&b, "• IRM #%d %s (%s) %s/%s verdict %s fault %s\n", ev.IRMNumber, ev.Alertname, ev.Severity, ev.Cluster, ev.Node, ev.Verdict, ev.Fault)
+		fmt.Fprintf(&b, "• IRM #%s %s (%s) %s/%s verdict %s fault %s\n", ev.Ref, ev.Alertname, ev.Severity, ev.Cluster, ev.Node, ev.Verdict, ev.Fault)
 	}
 	ts, err := a.Poster.PostDM(ctx, b.String())
 	if err != nil {
@@ -219,7 +220,7 @@ func (a *Agent) collapse(ctx context.Context, evs []event.Event) error {
 	}
 	now := a.now().UTC().Format(time.RFC3339)
 	for _, ev := range evs {
-		rec := &event.Record{IRMID: ev.IRMID, Event: ev, SlackTS: ts, PostedAt: now, PostAttempts: 1,
+		rec := &event.Record{ID: ev.ID, Event: ev, SlackTS: ts, PostedAt: now, PostAttempts: 1,
 			Collapsed: true, AckDecided: true, AckNote: "not acked: part of a burst summary"}
 		if err := a.Store.Save(rec); err != nil {
 			return err
@@ -230,12 +231,12 @@ func (a *Agent) collapse(ctx context.Context, evs []event.Event) error {
 
 // HandleEvent moves one event forward as far as it can this tick.
 func (a *Agent) HandleEvent(ctx context.Context, ev event.Event) error {
-	rec, err := a.Store.Get(ev.IRMID)
+	rec, err := a.Store.Get(ev.ID)
 	if err != nil {
 		return err
 	}
 	if rec == nil {
-		rec = &event.Record{IRMID: ev.IRMID, Event: ev}
+		rec = &event.Record{ID: ev.ID, Event: ev}
 	}
 	if rec.PostFailed {
 		return nil
@@ -243,7 +244,7 @@ func (a *Agent) HandleEvent(ctx context.Context, ev event.Event) error {
 	if rec.SlackTS == "" {
 		if rec.PostAttempts >= maxPostAttempts {
 			rec.PostFailed = true
-			a.logf("event %s: giving up posting after %d attempts; not acked", ev.IRMID, rec.PostAttempts)
+			a.logf("event %s: giving up posting after %d attempts; not acked", ev.ID, rec.PostAttempts)
 			return a.Store.Save(rec)
 		}
 		rec.PostAttempts++
@@ -264,19 +265,19 @@ func (a *Agent) HandleEvent(ctx context.Context, ev event.Event) error {
 		decision, note := a.ackGate(ctx, ev, rec)
 		switch decision {
 		case ackRetry:
-			a.logf("event %s: %s; retrying next tick", ev.IRMID, note)
+			a.logf("event %s: %s; retrying next tick", ev.ID, note)
 			return nil
 		case ackYes:
 			if a.DryRun {
 				note = "would ack (dry run): your shift, brief delivered"
-			} else if err := a.IRM.Acknowledge(ctx, ev.IRMID); err != nil && !errors.Is(err, irm.ErrAlreadyAcked) {
-				a.logf("event %s: ack failed: %v; retrying next tick", ev.IRMID, err)
+			} else if err := a.IRM.Acknowledge(ctx, ev.ID); err != nil && !errors.Is(err, irm.ErrAlreadyAcked) {
+				a.logf("event %s: ack failed: %v; retrying next tick", ev.ID, err)
 				return nil
 			} else {
 				rec.AckedAt = a.now().UTC().Format(time.RFC3339)
-				note = fmt.Sprintf("acked IRM #%d: your shift, brief delivered", ev.IRMNumber)
+				note = fmt.Sprintf("acked IRM #%s: your shift, brief delivered", ev.Ref)
 				if errors.Is(err, irm.ErrAlreadyAcked) {
-					note = fmt.Sprintf("IRM #%d was already acknowledged", ev.IRMNumber)
+					note = fmt.Sprintf("IRM #%s was already acknowledged", ev.Ref)
 				}
 			}
 		}
@@ -286,7 +287,7 @@ func (a *Agent) HandleEvent(ctx context.Context, ev event.Event) error {
 			return err
 		}
 		if err := a.Poster.Reply(ctx, rec.SlackTS, note); err != nil {
-			a.logf("event %s: reply failed: %v", ev.IRMID, err)
+			a.logf("event %s: reply failed: %v", ev.ID, err)
 		}
 	}
 	if a.wantsDC(rec) {
@@ -294,7 +295,7 @@ func (a *Agent) HandleEvent(ctx context.Context, ev event.Event) error {
 		if err := a.Store.Save(rec); err != nil {
 			return err
 		}
-		a.enqueue(dcJob{id: ev.IRMID})
+		a.enqueue(dcJob{id: ev.ID})
 	}
 	return nil
 }
@@ -338,7 +339,7 @@ func (a *Agent) ackGate(ctx context.Context, ev event.Event, rec *event.Record) 
 	if !mine.Covers(start) {
 		return ackNo, "not acked: alert fired at " + start.In(time.Local).Format("Mon 15:04 MST") + ", before your shift"
 	}
-	g, err := a.IRM.Group(ctx, ev.IRMID)
+	g, err := a.IRM.Group(ctx, ev.ID)
 	if err != nil {
 		return ackRetry, "IRM lookup failed: " + err.Error()
 	}
@@ -351,7 +352,7 @@ func (a *Agent) ackGate(ctx context.Context, ev event.Event, rec *event.Record) 
 // Render is the DM for one brief: the facts first, the brief under them.
 func Render(ev event.Event) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "*IRM #%d %s* (%s) %s / %s\n", ev.IRMNumber, ev.Alertname, ev.Severity, orDash(ev.Cluster), orDash(ev.Node))
+	fmt.Fprintf(&b, "*IRM #%s %s* (%s) %s / %s\n", ev.Ref, ev.Alertname, ev.Severity, orDash(ev.Cluster), orDash(ev.Node))
 	fmt.Fprintf(&b, "verdict %s · fault %s · failure mode %s", ev.Verdict, ev.Fault, ev.FailureMode)
 	if ev.Degraded != nil {
 		fmt.Fprintf(&b, " · degraded: %s", *ev.Degraded)
@@ -360,8 +361,8 @@ func Render(ev event.Event) string {
 		b.WriteString(" · DC draft pending")
 	}
 	b.WriteString("\n")
-	if ev.IRMURL != "" {
-		b.WriteString(ev.IRMURL + "\n")
+	if ev.URL != "" {
+		b.WriteString(ev.URL + "\n")
 	}
 	brief := strings.TrimSpace(ev.Brief)
 	if brief == "" {
@@ -439,7 +440,7 @@ func (a *Agent) runDC(ctx context.Context, j dcJob) error {
 				return err
 			}
 			return a.Poster.Reply(ctx, rec.SlackTS, fmt.Sprintf("DC request not drafted: %s/%s already %s on %s (IRM %s). Reply `file` to draft anyway.",
-				ev.Cluster, ev.Node, e.Status, e.TS.In(time.Local).Format("Jan 2"), e.IRMID))
+				ev.Cluster, ev.Node, e.Status, e.TS.In(time.Local).Format("Jan 2"), e.ID))
 		}
 	}
 	res, err := a.Runner.FileDCRequest(ctx, ev)
@@ -456,15 +457,15 @@ func (a *Agent) runDC(ctx context.Context, j dcJob) error {
 		msg = fmt.Sprintf("DC request for %s/%s already exists: %s. Nothing drafted.", ev.Cluster, ev.Node, orDash(res.Detail))
 	default:
 		status = "failed"
-		msg = fmt.Sprintf("DC request not drafted: %s. Draft file: %s. Manual: /file-dc-request %s", res.Detail, deref(ev.DCDraft), ev.IRMURL)
+		msg = fmt.Sprintf("DC request not drafted: %s. Draft file: %s. Manual: /file-dc-request %s", res.Detail, deref(ev.DCDraft), ev.URL)
 	}
 	// The run is a headless Claude session; its price is part of the result.
 	if res.CostUSD > 0 {
 		msg += fmt.Sprintf(" (run cost $%.2f)", res.CostUSD)
 	}
-	a.logf("dc %s: %s, cost $%.2f", ev.IRMID, status, res.CostUSD)
-	if err := a.Ledger.Append(ledger.Entry{TS: now, Cluster: ev.Cluster, Node: ev.Node, IRMID: ev.IRMID, Status: status}); err != nil {
-		a.logf("dc %s: ledger write failed, the next alert on %s may draft again: %v", ev.IRMID, ev.Node, err)
+	a.logf("dc %s: %s, cost $%.2f", ev.ID, status, res.CostUSD)
+	if err := a.Ledger.Append(ledger.Entry{TS: now, Cluster: ev.Cluster, Node: ev.Node, ID: ev.ID, Status: status}); err != nil {
+		a.logf("dc %s: ledger write failed, the next alert on %s may draft again: %v", ev.ID, ev.Node, err)
 	}
 	rec.DCStatus = status
 	if err := a.Store.Save(rec); err != nil {
@@ -500,7 +501,7 @@ func (a *Agent) HandleInbound(ctx context.Context, in slackio.Inbound) {
 	}
 	save := func(r *event.Record) {
 		if err := a.Store.Save(r); err != nil {
-			a.logf("record %s: save failed: %v", r.IRMID, err)
+			a.logf("record %s: save failed: %v", r.ID, err)
 		}
 	}
 	threadTS := in.ThreadTS
@@ -517,7 +518,7 @@ func (a *Agent) HandleInbound(ctx context.Context, in slackio.Inbound) {
 		rec, err = a.Store.ByThread(threadTS)
 		if err == nil && rec == nil {
 			if rec, err = a.Store.Get(g.ID); err == nil && rec == nil {
-				rec = &event.Record{IRMID: g.ID, Event: eventFromGroup(g), SlackTS: threadTS,
+				rec = &event.Record{ID: g.ID, Event: eventFromGroup(g), SlackTS: threadTS,
 					PostedAt: a.now().UTC().Format(time.RFC3339), PostAttempts: 1,
 					AckDecided: true, AckNote: "attached by hand; no automatic ack"}
 			}
@@ -552,10 +553,10 @@ func (a *Agent) HandleInbound(ctx context.Context, in slackio.Inbound) {
 	case "file":
 		rec.DCStatus = "queued"
 		save(rec)
-		a.enqueue(dcJob{id: rec.IRMID, force: true})
+		a.enqueue(dcJob{id: rec.ID, force: true})
 		reply(in.ThreadTS, fmt.Sprintf("Drafting the DC request for %s/%s now; this takes a few minutes.", ev.Cluster, ev.Node))
 	case "sent":
-		if err := a.Ledger.Append(ledger.Entry{TS: a.now(), Cluster: ev.Cluster, Node: ev.Node, IRMID: ev.IRMID, Status: "sent"}); err != nil {
+		if err := a.Ledger.Append(ledger.Entry{TS: a.now(), Cluster: ev.Cluster, Node: ev.Node, ID: ev.ID, Status: "sent"}); err != nil {
 			reply(in.ThreadTS, "Could not record it as sent: "+err.Error())
 			return
 		}
@@ -563,7 +564,7 @@ func (a *Agent) HandleInbound(ctx context.Context, in slackio.Inbound) {
 		save(rec)
 		reply(in.ThreadTS, fmt.Sprintf("Noted: DC request for %s/%s sent. No new draft for this node for 14 days unless you reply `file`.", ev.Cluster, ev.Node))
 	case "ignore":
-		if err := a.Ledger.Append(ledger.Entry{TS: a.now(), Cluster: ev.Cluster, Node: ev.Node, IRMID: ev.IRMID, Status: "ignored"}); err != nil {
+		if err := a.Ledger.Append(ledger.Entry{TS: a.now(), Cluster: ev.Cluster, Node: ev.Node, ID: ev.ID, Status: "ignored"}); err != nil {
 			reply(in.ThreadTS, "Could not record the ignore: "+err.Error())
 			return
 		}
@@ -575,7 +576,7 @@ func (a *Agent) HandleInbound(ctx context.Context, in slackio.Inbound) {
 			reply(in.ThreadTS, "Dry run: would ack on your instruction.")
 			return
 		}
-		err := a.IRM.Acknowledge(ctx, rec.IRMID)
+		err := a.IRM.Acknowledge(ctx, rec.ID)
 		if err != nil && !errors.Is(err, irm.ErrAlreadyAcked) {
 			reply(in.ThreadTS, "Ack failed: "+err.Error())
 			return
@@ -584,7 +585,7 @@ func (a *Agent) HandleInbound(ctx context.Context, in slackio.Inbound) {
 		rec.AckDecided = true
 		rec.AckNote = "acked on your instruction"
 		save(rec)
-		reply(in.ThreadTS, fmt.Sprintf("Acked IRM #%d on your instruction.", ev.IRMNumber))
+		reply(in.ThreadTS, fmt.Sprintf("Acked IRM #%s on your instruction.", ev.Ref))
 	case "unack":
 		if rec.AckedAt == "" {
 			reply(in.ThreadTS, "I did not ack this one, so I will not unack it. Use the IRM card.")
@@ -594,13 +595,13 @@ func (a *Agent) HandleInbound(ctx context.Context, in slackio.Inbound) {
 			reply(in.ThreadTS, "Dry run: would unack.")
 			return
 		}
-		if err := a.IRM.Unacknowledge(ctx, rec.IRMID); err != nil {
+		if err := a.IRM.Unacknowledge(ctx, rec.ID); err != nil {
 			reply(in.ThreadTS, "Unack failed: "+err.Error())
 			return
 		}
 		rec.AckNote = "unacked on your instruction"
 		save(rec)
-		reply(in.ThreadTS, fmt.Sprintf("Unacked IRM #%d; it escalates again.", ev.IRMNumber))
+		reply(in.ThreadTS, fmt.Sprintf("Unacked IRM #%s; it escalates again.", ev.Ref))
 	case "status":
 		reply(in.ThreadTS, a.status(ctx))
 	default:
@@ -617,7 +618,11 @@ func eventFromGroup(g irm.Group) event.Event {
 	if url == "" {
 		url = g.Permalinks.Web
 	}
-	return event.Event{IRMID: g.ID, IRMNumber: g.Number, IRMURL: url, Alertname: l["alertname"],
+	ref := ""
+	if g.Number != 0 {
+		ref = strconv.Itoa(g.Number)
+	}
+	return event.Event{Pager: "irm", ID: g.ID, Ref: ref, URL: url, Alertname: l["alertname"],
 		Severity: l["severity"], Cluster: l["cluster"], Node: l["node"], StartsAt: g.StartsAt(),
 		Fault: "manual", Verdict: "manual", FailureMode: "manual", Brief: "(attached by hand, no brief)",
 		TS: time.Now().UTC().Format(time.RFC3339)}

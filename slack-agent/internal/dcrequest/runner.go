@@ -85,9 +85,9 @@ func Args(prompt, model string) []string {
 }
 
 func BuildPrompt(ev event.Event) string {
-	link := ev.IRMURL
+	link := ev.URL
 	if link == "" {
-		link = fmt.Sprintf("IRM alert group #%d", ev.IRMNumber)
+		link = fmt.Sprintf("IRM alert group #%s", ev.Ref)
 	}
 	return fmt.Sprintf(`Run /file-dc-request for %s (cluster %s, node %s, alert %s) in draft-only mode.
 Rules for this unattended run:

@@ -1,0 +1,26 @@
+{
+  "irm_id": "S2",
+  "event": {
+    "irm_id": "S2",
+    "irm_number": 502,
+    "irm_url": "https://slack.example/archives/C1/p502",
+    "alertname": "SnapY",
+    "severity": "warning",
+    "cluster": "c31",
+    "node": "gpu-3",
+    "starts_at": "2026-10-25T03:04:00Z",
+    "fault": "xid79",
+    "verdict": "real",
+    "failure_mode": "gpu_fallen_off_bus",
+    "degraded": null,
+    "dc_draft": "/tmp/dc/draft-S2.md",
+    "brief": "BRIEF SnapY on c31",
+    "ts": "2026-10-25T03:05:00Z"
+  },
+  "post_attempts": 0,
+  "deferred": true,
+  "deferred_at": "2026-10-25T03:05:12Z",
+  "ack_decided": true,
+  "ack_note": "off-shift: held for the morning digest",
+  "updated_at": "2026-10-25T03:05:12Z"
+}

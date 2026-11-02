@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -151,7 +152,7 @@ func newHarness(t *testing.T, shifts []oncall.Shift) *harness {
 func (h *harness) put(ev event.Event) {
 	h.t.Helper()
 	b, _ := json.Marshal(ev)
-	if err := os.WriteFile(filepath.Join(h.outbox, ev.IRMID+".json"), b, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(h.outbox, ev.ID+".json"), b, 0o644); err != nil {
 		h.t.Fatal(err)
 	}
 }
@@ -174,13 +175,13 @@ func (h *harness) rec(id string) *event.Record {
 }
 
 func ev(id string, num int, sev string, startsAt time.Time) event.Event {
-	return event.Event{IRMID: id, IRMNumber: num, IRMURL: "https://slack/p" + id, Alertname: "GPU Xid Critical",
+	return event.Event{ID: id, Ref: strconv.Itoa(num), URL: "https://slack/p" + id, Alertname: "GPU Xid Critical",
 		Severity: sev, Cluster: "c1", Node: "n-" + id, StartsAt: startsAt.Format(time.RFC3339),
 		Fault: "real", Verdict: "hold", FailureMode: "hardware", Brief: "ALERT: GPU Xid Critical (" + sev + ")", TS: now.Format(time.RFC3339)}
 }
 
 func withDraft(e event.Event) event.Event {
-	p := "/drafts/" + e.IRMID + ".md"
+	p := "/drafts/" + e.ID + ".md"
 	e.DCDraft = &p
 	return e
 }
