@@ -83,7 +83,8 @@ the operator's admin kubeconfigs, in a sandboxed unit (`ProtectHome`,
    the team's `file-dc-request` skill. Update both when a cluster or channel changes.
 7. **Remove the legacy outbox keys.** `irm_id`, `irm_number` and `irm_url` are
    still written next to `pager`, `id`, `ref` and `url`
-   (`docs/pager-adapters.md`). Drop them in one small PR after the poller and
+   (`docs/pager-adapters.md`). Drop the legacy writes (not the read fallback in the
+   agent, since records are never pruned) in one small PR after the poller and
    the agent have both run two weeks on the pager-boundary release with no skew errors.
 
 ## Traps hit along the way

@@ -137,6 +137,8 @@ set_groups "$(group G5 105 new DiskInfo c3 info)" "$(group G4 104 resolved Probe
 run_poll
 [ -s "$TMP/investigated" ] && bad "resolved and info -> not investigated" "$(cat "$TMP/investigated")" || ok "resolved and info -> not investigated"
 check "resolved -> skip is logged" "IRM #104 skipped: resolved before investigation" "$(cat "$LOG")"
+skipline=$(grep '^--- ' "$LOG" | grep '#104 ' | tail -n 1)
+[[ "$skipline" =~ ^---\ [0-9T:-]+Z\ IRM\ \#104\ skipped:\ resolved\ before\ investigation\ \(G4\)$ ]] && ok "resolved -> skip line format" || bad "resolved -> skip line format" "got: $skipline"
 
 # 5. The same alert on the same node inside the window is one problem: one brief.
 set_groups "$(group G7 107 new NodeTelemetryLost c4 warning n1)" "$(group G6 106 new NodeTelemetryLost c4 warning n1)" "$(group G5 105 new DiskInfo c3 info)"
@@ -322,6 +324,29 @@ jq -e '.irm_number == null and .id == "O3" and .irm_id == "O3"' "$OB19/O3.json" 
 : > "$TMP/investigated"
 run_poll STATE_DIR="$S19" OUTBOX_DIR="$OB19"
 [ "$RC" -eq 0 ] && [ ! -s "$TMP/investigated" ] && ok "odd groups -> not revisited" || bad "odd groups -> not revisited" "rc=$RC $(cat "$TMP/investigated")"
+
+# 20. One group with a payload of the wrong shape must not fail the poll for
+#     everyone: it is recorded as seen and dropped, the others are processed.
+#     A body that is not alert groups at all is still an error.
+S20="$TMP/state-shapes"
+set_groups "$(group W0 800 acknowledged Old c60 warning)"
+run_poll STATE_DIR="$S20"
+w1=$(group W1 801 new X c60 critical | jq -c '.last_alert.payload = "just a string"')
+w2=$(group W2 802 new X c60 critical | jq -c '.last_alert.payload.alerts = {"a": 1}')
+w3=$(group W3 803 new X c60 critical | jq -c '.last_alert.payload.alerts = ["x"] | del(.last_alert.payload.commonLabels)')
+w4=$(group W4 804 new X c60 critical | jq -c '.last_alert.payload.alerts[0].labels = "str" | del(.last_alert.payload.commonLabels)')
+set_groups "$(group W5 805 new ShapeOk c60 critical)" "$w4" "$w3" "$w2" "$w1" "$(group W0 800 acknowledged Old c60 warning)"
+: > "$TMP/investigated"
+run_poll STATE_DIR="$S20"
+[ "$RC" -eq 0 ] && ok "odd shapes -> poll succeeds" || bad "odd shapes -> poll succeeds" "rc=$RC err=$ERR"
+[ "$(wc -l < "$TMP/investigated" | tr -d ' ')" = 1 ] && check "odd shapes -> only the normal group investigated" '"alertname":"ShapeOk"' "$(cat "$TMP/investigated")" || bad "odd shapes -> only the normal group investigated" "$(cat "$TMP/investigated")"
+: > "$TMP/investigated"
+run_poll STATE_DIR="$S20"
+[ "$RC" -eq 0 ] && [ ! -s "$TMP/investigated" ] && ok "odd shapes -> not revisited" || bad "odd shapes -> not revisited" "rc=$RC $(cat "$TMP/investigated")"
+echo '{"detail": "not alert groups"}' > "$TMP/groups.json"
+run_poll STATE_DIR="$S20"
+[ "$RC" -eq 1 ] && ok "body without results -> exit 1" || bad "body without results -> exit 1" "rc=$RC"
+[ "$(printf '%s\n' "$ERR" | grep -c .)" = 1 ] && check "body without results -> one error line" "error: IRM alert_groups returned a body that is not alert groups" "$ERR" || bad "body without results -> one error line" "$ERR"
 
 echo
 echo "$PASS passed, $FAIL failed"

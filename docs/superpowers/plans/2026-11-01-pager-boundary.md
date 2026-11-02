@@ -15,7 +15,7 @@
 - **No regression for IRM.** Every user-visible string stays byte-identical: briefs log lines (`IRM #N ...`), DM text, ack notes, digest lines, the DC prompt, DC draft filenames.
 - **Existing tests are the regression contract.** In `tests/*.sh` and `*_test.go`, a changed line may rename a field, constructor or file path. It must not change an expected string or assertion, except the lines listed under "Allowed test edits" in each task.
 - **Persistent state on the host stays readable with no migration:** the poller's `seen`, `storm`, `degraded` and `degraded-streak` files, the agent's `events/*.json` records, `dc-requests.tsv`, and outbox files.
-- **No env var renames.** `IRM_API_URL`, `IRM_PERSONAL_TOKEN`, `IRM_SCHEDULE_ID`, `GRAFANA_URL` and `GRAFANA_TOKEN` keep their meaning. New: `PAGER` (default `irm`) on both sides.
+- **No env var renames.** `IRM_API_URL`, `IRM_PERSONAL_TOKEN`, `IRM_SCHEDULE_ID`, `GRAFANA_URL` and `GRAFANA_TOKEN` keep their meaning. New: `PAGER` (default `irm`) on both sides. (Changed during implementation to `ONCALL_PAGER` and `ONCALL_PAGER_ADAPTER`, because `PAGER` is the terminal-pager variable.)
 - **The write allowlist stays a transport in the IRM client.** No code path may gain a write.
 - **Label map:** `irm` -> `IRM`; any other pager's label is its name. It lives in exactly two places, `pager_label` in `poll.sh` and `pager.Label` in Go, and both are tested.
 - Each task's final check is the full CI set: per Go module `test -z "$(gofmt -l .)" && go vet ./... && go test -race ./...`, plus the three `tests/*.sh`.
@@ -241,7 +241,7 @@ Each step runs on the production host. The agent is still in dry run, so a mista
   Expected: `systemctl cat oncall-copilot-poll.service` shows `poll.sh`. The next poll logs no `error:` and no `bootstrapped` line (that would mean the `seen` state was lost). The heartbeat keeps pinging.
 - [ ] **Step 4: First real brief after deploy.**
   Expected: the outbox file has `pager`, `id`, `ref`, `url` and all legacy keys. Its briefs log header reads `IRM #<n>`. The DM has the same layout as Step 1's examples.
-- [ ] **Step 5: Rollback, if any expectation fails.** Revert the merge commit on main, then rerun both installers (poller first, then agent). Dual-write and read keep either order safe.
+- [ ] **Step 5: Rollback, if any expectation fails.** Revert the merge commit on main, then rerun both installers (poller first, then agent). Dual-write and read keep either order safe. On rollback `install.sh` pulls (removing `poll.sh`) before it copies the old unit, so one timer tick in between may fail one poll; harmless.
 
 ## Not in this plan
 

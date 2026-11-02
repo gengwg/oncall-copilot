@@ -39,7 +39,10 @@ JSONL on stdout, oldest first, one object per alert group:
 
 What `pagers/irm.sh` does: it fetches the first 50 groups, reverses them, and takes
 the firing alert of each group (else its first alert). A group with no alerts
-gets an empty `severity`, so it is skipped. `url` is the Slack permalink,
+gets an empty `severity` only when `commonLabels.severity` is also missing, and is then
+dropped by the default `SEVERITIES` filter; with a group severity it is investigated
+with alertname `Unknown`. A group whose payload is the wrong shape is mapped on its own
+to an empty `severity`, so it is marked seen and dropped without failing the poll. `url` is the Slack permalink,
 else the web one.
 
 Event labels come from `pager_label` in `poll.sh` (`irm` shows as `IRM`; any
@@ -61,7 +64,10 @@ poller and the agent can be deployed or rolled back in either order.
 
 Removing the legacy keys: one small PR, after both services have run two weeks
 on the release that introduced the boundary with no skew errors. It drops the
-`irm_*` lines in `emit_event` and the fallback and dual write in `event`.
+legacy writes: the `irm_*` keys in `emit_event`, `Event.MarshalJSON` and
+`Record.MarshalJSON`. It keeps the read fallback in `Event.UnmarshalJSON` and
+`Record.UnmarshalJSON` as the default, because agent records are never pruned and
+pre-release records would otherwise load with an empty ID.
 
 ## Agent interface
 

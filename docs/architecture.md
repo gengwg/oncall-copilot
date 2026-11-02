@@ -38,7 +38,7 @@ minikube (demo env)
 ```
 IRM alert groups -> poll.sh (pagers/irm.sh) (timer, restricted user, read-only token)
   seen/storm/repeat filters -> investigate.sh -> brief, incident report, DC draft file
-  -> $OUTBOX_DIR/<irm_id>.json  (tmp+rename; skipped groups emit nothing)
+  -> $OUTBOX_DIR/<id>.json  (tmp+rename; skipped groups emit nothing)
 
 slack-agent (owner's user, Socket Mode)
   scan outbox every 10s -> per-event record {slack_ts, acked_at, dc_status}
