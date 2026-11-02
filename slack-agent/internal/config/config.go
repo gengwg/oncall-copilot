@@ -16,6 +16,7 @@ type Config struct {
 	SlackAppToken string
 	SlackOwnerID  string
 
+	Pager            string // which pager adapter; ONCALL_PAGER, default irm
 	IRMAPIURL        string
 	GrafanaURL       string
 	IRMPersonalToken string
@@ -52,14 +53,23 @@ func Load(getenv func(string) string) (Config, error) {
 		}
 		return def
 	}
+	// Not PAGER: that is the terminal pager variable and is set in most shells.
+	pagerName := opt("ONCALL_PAGER", "irm")
+	irmReq := func(k string) string {
+		if pagerName != "irm" {
+			return strings.TrimSpace(getenv(k))
+		}
+		return req(k)
+	}
 	c := Config{
+		Pager:            pagerName,
 		SlackBotToken:    req("SLACK_BOT_TOKEN"),
 		SlackAppToken:    req("SLACK_APP_TOKEN"),
 		SlackOwnerID:     req("SLACK_OWNER_ID"),
-		IRMAPIURL:        req("IRM_API_URL"),
+		IRMAPIURL:        irmReq("IRM_API_URL"),
 		GrafanaURL:       opt("GRAFANA_URL", ""),
-		IRMPersonalToken: req("IRM_PERSONAL_TOKEN"),
-		IRMScheduleID:    req("IRM_SCHEDULE_ID"),
+		IRMPersonalToken: irmReq("IRM_PERSONAL_TOKEN"),
+		IRMScheduleID:    irmReq("IRM_SCHEDULE_ID"),
 		OnCallMe:         req("ONCALL_ME"),
 		OutboxDir:        req("OUTBOX_DIR"),
 		AgentStateDir:    opt("AGENT_STATE_DIR", filepath.Join(home, ".local", "state", "oncall-slack-agent")),
@@ -96,6 +106,9 @@ func Load(getenv func(string) string) (Config, error) {
 		}
 	} else {
 		c.DigestAt = ""
+	}
+	if c.Pager != "irm" {
+		return c, fmt.Errorf("ONCALL_PAGER=%s: no such pager", c.Pager)
 	}
 	if len(missing) > 0 {
 		return c, fmt.Errorf("missing env: %s", strings.Join(missing, ", "))

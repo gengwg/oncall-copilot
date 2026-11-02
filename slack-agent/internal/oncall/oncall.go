@@ -7,12 +7,12 @@ import (
 	"time"
 )
 
-// Shift is one row of IRM's final_shifts: who covers [Start, End).
+// Shift is one row of a pager's schedule: who covers [Start, End).
 type Shift struct {
-	UserPK    string    `json:"user_pk"`
-	UserEmail string    `json:"user_email"`
-	Start     time.Time `json:"shift_start"`
-	End       time.Time `json:"shift_end"`
+	UserPK    string
+	UserEmail string
+	Start     time.Time
+	End       time.Time
 }
 
 func (s Shift) Covers(at time.Time) bool { return !at.Before(s.Start) && at.Before(s.End) }

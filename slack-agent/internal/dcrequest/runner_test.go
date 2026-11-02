@@ -33,7 +33,7 @@ func TestParseResult(t *testing.T) {
 }
 
 func TestBuildPromptAndArgs(t *testing.T) {
-	ev := event.Event{IRMURL: "https://slack/p9", Cluster: "cheerful-tetra", Node: "gpu-7", Alertname: "GPU Xid Critical"}
+	ev := event.Event{URL: "https://slack/p9", Cluster: "cheerful-tetra", Node: "gpu-7", Alertname: "GPU Xid Critical"}
 	p := BuildPrompt(ev)
 	for _, want := range []string{"/file-dc-request", "https://slack/p9", "cheerful-tetra", "gpu-7", "Do not cordon", "RESULT: ALREADY_SENT", "RESULT: DRAFTED", "RESULT: FAILED"} {
 		if !strings.Contains(p, want) {

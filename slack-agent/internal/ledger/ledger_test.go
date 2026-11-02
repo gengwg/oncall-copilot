@@ -17,16 +17,16 @@ func TestRecent(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	must(Entry{TS: now.Add(-20 * 24 * time.Hour), Cluster: "c1", Node: "n1", IRMID: "old", Status: "drafted"})
-	must(Entry{TS: now.Add(-3 * 24 * time.Hour), Cluster: "c1", Node: "n1", IRMID: "fail", Status: "failed"})
-	must(Entry{TS: now.Add(-2 * 24 * time.Hour), Cluster: "c1", Node: "n2", IRMID: "other", Status: "drafted"})
+	must(Entry{TS: now.Add(-20 * 24 * time.Hour), Cluster: "c1", Node: "n1", ID: "old", Status: "drafted"})
+	must(Entry{TS: now.Add(-3 * 24 * time.Hour), Cluster: "c1", Node: "n1", ID: "fail", Status: "failed"})
+	must(Entry{TS: now.Add(-2 * 24 * time.Hour), Cluster: "c1", Node: "n2", ID: "other", Status: "drafted"})
 
 	if e, ok := l.Recent("c1", "n1", now.Add(-14*24*time.Hour)); ok {
 		t.Fatalf("an old draft and a recent failure must not count, got %+v", e)
 	}
-	must(Entry{TS: now.Add(-1 * 24 * time.Hour), Cluster: "c1", Node: "n1", IRMID: "new", Status: "ignored"})
+	must(Entry{TS: now.Add(-1 * 24 * time.Hour), Cluster: "c1", Node: "n1", ID: "new", Status: "ignored"})
 	e, ok := l.Recent("c1", "n1", now.Add(-14*24*time.Hour))
-	if !ok || e.IRMID != "new" || e.Status != "ignored" {
+	if !ok || e.ID != "new" || e.Status != "ignored" {
 		t.Fatalf("a recent ignore settles it, got %+v ok=%v", e, ok)
 	}
 	if _, ok := l.Recent("c2", "n1", now.Add(-14*24*time.Hour)); ok {

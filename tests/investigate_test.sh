@@ -511,7 +511,7 @@ node_line() { # node_line <cluster>: the line the poller builds for a real node 
   jq -nc --arg c "$1" '{status:"firing", alertname:"GPU Xid Critical", severity:"warning",
     summary:"Critical GPU Xid on gpu-node-7", description:"node-problem-detector latched XidCritical",
     labels:{cluster:$c, node:"gpu-node-7", condition:"XidCritical"}, starts_at:"2026-10-25T09:04:00Z",
-    irm_number:5157, irm_url:"https://slack.example/archives/C1/p123"}'
+    pager:"irm", label:"IRM", ref:"5157", url:"https://slack.example/archives/C1/p123"}'
 }
 touch "$TMP/last_prompt.hwpage"
 run_investigate_line "$(node_line c1)" "${DC[@]}"

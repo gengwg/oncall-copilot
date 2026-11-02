@@ -16,7 +16,7 @@ AI track). That demo is retired and kept below for reference.
 Two services on one always-on host:
 
 ```
-Grafana IRM alert groups --poll (read-only SA token)--> alert-relay/irm-poll.sh
+Grafana IRM alert groups --poll (read-only SA token)--> alert-relay/poll.sh (IRM adapter)
    (restricted system user, systemd timer)   -> investigate.sh -> brief + DC draft
                                               -> one JSON event per brief in an outbox
                                                         |
@@ -49,7 +49,7 @@ settings: `deploy/systemd/README.md`. The agent starts in dry run
 
 ## Layout
 
-- `alert-relay/` — `irm-poll.sh` (polls IRM; the real mode) and `investigate.sh`
+- `alert-relay/` — `poll.sh` and `pagers/irm.sh` (poll IRM; the real mode) and `investigate.sh`
   (evidence, model call, brief, report, DC draft; both modes). Node evidence comes
   from per-cluster read-only kubeconfigs in `KUBECONFIG_DIR`; the Prometheus
   scenario queries still read the demo-app's `demo_*` series. The Go relay is the

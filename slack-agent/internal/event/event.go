@@ -9,15 +9,17 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
 
-// Event is one brief, as alert-relay/irm-poll.sh writes it to the outbox.
+// Event is one brief, as alert-relay/poll.sh writes it to the outbox.
 type Event struct {
-	IRMID       string  `json:"irm_id"`
-	IRMNumber   int     `json:"irm_number"`
-	IRMURL      string  `json:"irm_url"`
+	Pager       string  `json:"pager"`
+	ID          string  `json:"id"`
+	Ref         string  `json:"ref"` // the pager's human-facing number, "" when it has none
+	URL         string  `json:"url"`
 	Alertname   string  `json:"alertname"`
 	Severity    string  `json:"severity"`
 	Cluster     string  `json:"cluster"`
@@ -32,6 +34,60 @@ type Event struct {
 	TS          string  `json:"ts"`
 }
 
+// pagerIRM is the pager of every file written before the pager boundary.
+const pagerIRM = "irm"
+
+type eventAlias Event
+
+// UnmarshalJSON reads the neutral keys and falls back to the irm_* keys that
+// older poller and agent versions wrote.
+func (e *Event) UnmarshalJSON(b []byte) error {
+	var aux struct {
+		eventAlias
+		IRMID     string `json:"irm_id"`
+		IRMNumber *int   `json:"irm_number"` // null when IRM gave no group number
+		IRMURL    string `json:"irm_url"`
+	}
+	if err := json.Unmarshal(b, &aux); err != nil {
+		return err
+	}
+	*e = Event(aux.eventAlias)
+	if e.ID == "" {
+		e.ID = aux.IRMID
+	}
+	if e.Ref == "" && aux.IRMNumber != nil {
+		e.Ref = strconv.Itoa(*aux.IRMNumber)
+	}
+	if e.URL == "" {
+		e.URL = aux.IRMURL
+	}
+	if e.Pager == "" {
+		e.Pager = pagerIRM
+	}
+	return nil
+}
+
+// MarshalJSON writes the neutral keys, and for IRM the irm_* keys too so the
+// previous agent version can still read the file after a rollback.
+func (e Event) MarshalJSON() ([]byte, error) {
+	if e.Pager == "" {
+		e.Pager = pagerIRM
+	}
+	out := struct {
+		eventAlias
+		IRMID     *string `json:"irm_id,omitempty"`
+		IRMNumber *int    `json:"irm_number,omitempty"`
+		IRMURL    *string `json:"irm_url,omitempty"`
+	}{eventAlias: eventAlias(e)}
+	if e.Pager == pagerIRM {
+		out.IRMID, out.IRMURL = &e.ID, &e.URL
+		if n, err := strconv.Atoi(e.Ref); err == nil {
+			out.IRMNumber = &n
+		}
+	}
+	return json.Marshal(out)
+}
+
 // StartTime parses the alert's firing time. ok is false when it is missing or
 // unparseable, which callers treat as "unknown", never as "now".
 func (e Event) StartTime() (t time.Time, ok bool) {
@@ -42,7 +98,7 @@ func (e Event) StartTime() (t time.Time, ok bool) {
 // Record is what the agent did with one event. Stages only move forward and
 // each is saved before the next side effect, so a restart repeats nothing.
 type Record struct {
-	IRMID        string `json:"irm_id"`
+	ID           string `json:"id"`
 	Event        Event  `json:"event"`
 	SlackTS      string `json:"slack_ts,omitempty"`
 	PostedAt     string `json:"posted_at,omitempty"`
@@ -57,6 +113,32 @@ type Record struct {
 	AckNote      string `json:"ack_note,omitempty"`
 	DCStatus     string `json:"dc_status,omitempty"`
 	UpdatedAt    string `json:"updated_at"`
+}
+
+type recordAlias Record
+
+// UnmarshalJSON falls back to irm_id for records written before the boundary.
+func (r *Record) UnmarshalJSON(b []byte) error {
+	var aux struct {
+		recordAlias
+		IRMID string `json:"irm_id"`
+	}
+	if err := json.Unmarshal(b, &aux); err != nil {
+		return err
+	}
+	*r = Record(aux.recordAlias)
+	if r.ID == "" {
+		r.ID = aux.IRMID
+	}
+	return nil
+}
+
+// MarshalJSON also writes irm_id so a rolled-back agent finds its records.
+func (r Record) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		recordAlias
+		IRMID string `json:"irm_id"`
+	}{recordAlias(r), r.ID})
 }
 
 // Store keeps one JSON file per record in a directory the agent owns.
@@ -89,19 +171,19 @@ func (s *Store) Get(id string) (*Record, error) {
 
 // Save writes whole-then-rename so a crash never leaves a torn record.
 func (s *Store) Save(r *Record) error {
-	if r.IRMID == "" {
-		return errors.New("record without irm_id")
+	if r.ID == "" {
+		return errors.New("record without id")
 	}
 	r.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	b, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := s.path(r.IRMID) + ".tmp"
+	tmp := s.path(r.ID) + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.path(r.IRMID))
+	return os.Rename(tmp, s.path(r.ID))
 }
 
 // All returns every record, oldest post first.

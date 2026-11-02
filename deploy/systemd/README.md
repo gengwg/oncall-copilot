@@ -33,9 +33,12 @@ any unit is installed:
 4. **The system user**: `oncall-copilot`, home `/var/lib/oncall-copilot`,
    nologin, no sudo, with a clone of this repository at
    `/var/lib/oncall-copilot/oncall-copilot`.
-5. **Exit test** before enabling the timer: one hand-run `irm-poll.sh` on a
+5. **Exit test** before enabling the timer: one hand-run `poll.sh` on a
    fresh state dir only records existing groups; the next run with a new group
    writes a brief with non-empty node evidence to `briefs.log`.
+
+`irm-poll.sh` is a shim that execs `poll.sh`, so an older unit file keeps working.
+The provider is chosen by `ONCALL_PAGER` (default `irm`); see `docs/pager-adapters.md`.
 
 ## Heartbeats
 

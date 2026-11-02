@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for alert-relay/irm-poll.sh against a stub IRM alert-groups API and a
+# Tests for alert-relay/poll.sh (and its pagers/ adapters) against a stub IRM alert-groups API and a
 # stub investigate.sh that records what it was asked to investigate.
 #
 # Usage: ./tests/irm_poll_test.sh
@@ -99,7 +99,7 @@ run_poll() { # run_poll [env assignments...]; sets OUT/ERR/RC
   out=$(mktemp); err=$(mktemp)
   env IRM_API_URL="http://127.0.0.1:$PORT" GRAFANA_URL=https://stack.example GRAFANA_TOKEN="$TOKEN" \
       STATE_DIR="$TMP/state" INVESTIGATE="$TMP/investigate.sh" "$@" \
-      bash "$ROOT/alert-relay/irm-poll.sh" > "$out" 2> "$err"
+      bash "$ROOT/alert-relay/${POLL_SCRIPT:-poll.sh}" > "$out" 2> "$err"
   RC=$?
   OUT=$(cat "$out"); ERR=$(cat "$err")
   rm -f "$out" "$err"
@@ -124,8 +124,8 @@ check "new group -> brief in the shadow log" "BRIEF GpuFellOff on c2" "$(cat "$L
 check "new group -> log entry carries the IRM number" "IRM #103" "$(cat "$LOG")"
 check "new group -> line carries the node condition" '"condition":"GpuXidCritical"' "$(cat "$TMP/investigated")"
 lacks "new group -> customer label not passed on" '"customer"' "$(cat "$TMP/investigated")"
-check "new group -> line carries the IRM number" '"irm_number":103' "$(cat "$TMP/investigated")"
-check "new group -> line carries the Slack permalink" '"irm_url":"https://slack.example/archives/C1/p103"' "$(cat "$TMP/investigated")"
+check "new group -> line carries the IRM number" '"ref":"103"' "$(cat "$TMP/investigated")"
+check "new group -> line carries the Slack permalink" '"url":"https://slack.example/archives/C1/p103"' "$(cat "$TMP/investigated")"
 
 # 3. Polling again changes nothing.
 : > "$TMP/investigated"
@@ -137,6 +137,8 @@ set_groups "$(group G5 105 new DiskInfo c3 info)" "$(group G4 104 resolved Probe
 run_poll
 [ -s "$TMP/investigated" ] && bad "resolved and info -> not investigated" "$(cat "$TMP/investigated")" || ok "resolved and info -> not investigated"
 check "resolved -> skip is logged" "IRM #104 skipped: resolved before investigation" "$(cat "$LOG")"
+skipline=$(grep '^--- ' "$LOG" | grep '#104 ' | tail -n 1)
+[[ "$skipline" =~ ^---\ [0-9T:-]+Z\ IRM\ \#104\ skipped:\ resolved\ before\ investigation\ \(G4\)$ ]] && ok "resolved -> skip line format" || bad "resolved -> skip line format" "got: $skipline"
 
 # 5. The same alert on the same node inside the window is one problem: one brief.
 set_groups "$(group G7 107 new NodeTelemetryLost c4 warning n1)" "$(group G6 106 new NodeTelemetryLost c4 warning n1)" "$(group G5 105 new DiskInfo c3 info)"
@@ -229,6 +231,122 @@ jq -e '.degraded == "model call failed" and .fault == "unknown" and .dc_draft ==
 set_groups "$(group E4 404 new NoBriefY c22 critical)" "$(group E3 403 new ModelDownE c21 critical)"
 run_poll OUTBOX_DIR="$OB"
 jq -e '.degraded == "investigation produced no brief" and .brief == ""' "$OB/E4.json" >/dev/null && ok "no brief -> event still written, marked degraded" || bad "no brief -> event still written, marked degraded" "$(cat "$OB/E4.json" 2>&1)"
+
+# 13. Pin the exact line handed to the investigator, the outbox event and the
+#     briefs log header for one firing group, so a provider refactor can prove
+#     it changed none of them. Fresh state so the group counts as new.
+SNAP="$TMP/state-snap"; OB13="$TMP/outbox-snap"
+set_groups "$(group S0 500 resolved SnapOld c30 warning)"
+run_poll STATE_DIR="$SNAP" OUTBOX_DIR="$OB13"
+set_groups "$(group S1 501 firing SnapX c30 critical gpu-9)" "$(group S0 500 resolved SnapOld c30 warning)"
+: > "$TMP/investigated"
+run_poll STATE_DIR="$SNAP" OUTBOX_DIR="$OB13"
+want_line='{"status":"firing","alertname":"SnapX","severity":"critical","summary":"summary SnapX","description":"description SnapX","labels":{"alertname":"SnapX","cluster":"c30","node":"gpu-9","severity":"critical","condition":"GpuXidCritical"},"starts_at":"2026-10-25T09:04:00Z","pager":"irm","label":"IRM","ref":"501","url":"https://slack.example/archives/C1/p501"}'
+got_line=$(tail -n 1 "$TMP/investigated" | jq -S . 2>&1)
+[ "$got_line" = "$(jq -S . <<< "$want_line")" ] && ok "snapshot -> investigated line" || bad "snapshot -> investigated line" "got: $got_line"
+want_ev='{"pager":"irm","id":"S1","ref":"501","url":"https://slack.example/archives/C1/p501","irm_id":"S1","irm_number":501,"irm_url":"https://slack.example/archives/C1/p501","alertname":"SnapX","severity":"critical","cluster":"c30","node":"gpu-9","starts_at":"2026-10-25T09:04:00Z","fault":"unknown","verdict":"unknown","failure_mode":"unknown","degraded":null,"dc_draft":null}'
+got_ev=$(jq -S 'del(.ts, .brief)' "$OB13/S1.json" 2>&1)
+[ "$got_ev" = "$(jq -S . <<< "$want_ev")" ] && ok "snapshot -> outbox event" || bad "snapshot -> outbox event" "got: $got_ev"
+jq -e '.brief == "BRIEF SnapX on c30" and (.ts | test("^[0-9T:-]+Z$"))' "$OB13/S1.json" >/dev/null && ok "snapshot -> event brief and ts" || bad "snapshot -> event brief and ts" "$(cat "$OB13/S1.json" 2>&1)"
+hdr=$(grep '^=== ' "$SNAP/briefs.log" 2>/dev/null | tail -n 1)
+[[ "$hdr" =~ ^===\ [0-9T:-]+Z\ IRM\ \#501\ S1$ ]] && ok "snapshot -> briefs log header" || bad "snapshot -> briefs log header" "got: $hdr"
+
+# 14. The old entry point still works: irm-poll.sh is a shim for poll.sh, so a
+#     unit file and a clone that get out of step keep polling.
+SA="$TMP/state-poll"; SB="$TMP/state-shim"
+set_groups "$(group G1 101 acknowledged NvlinkDown c1 warning)"
+run_poll STATE_DIR="$SA"; POLL_SCRIPT=irm-poll.sh run_poll STATE_DIR="$SB"
+set_groups "$(group G3 103 new GpuFellOff c2 critical)" "$(group G1 101 acknowledged NvlinkDown c1 warning)"
+run_poll STATE_DIR="$SA"; POLL_SCRIPT=irm-poll.sh run_poll STATE_DIR="$SB"
+strip() { sed -E 's/^=== [0-9T:-]+Z /=== /' "$1"; }
+[ -s "$SB/briefs.log" ] && [ "$(strip "$SA/briefs.log")" = "$(strip "$SB/briefs.log")" ] && ok "shim -> same briefs log as poll.sh" || bad "shim -> same briefs log as poll.sh" "poll.sh: $(cat "$SA/briefs.log" 2>&1) shim: $(cat "$SB/briefs.log" 2>&1)"
+
+# 15. State written by the pre-split bootstrap (one IRM id per line) is still
+#     honoured: nothing is re-bootstrapped or re-investigated.
+S15="$TMP/state-old"; mkdir -p "$S15"
+printf '%s\n' G3 G2 G1 > "$S15/seen"
+set_groups "$(group G3 103 new GpuFellOff c2 critical)" "$(group G2 102 new XidCritical c1 critical)" "$(group G1 101 acknowledged NvlinkDown c1 warning)"
+: > "$TMP/investigated"
+run_poll STATE_DIR="$S15"
+[ "$RC" -eq 0 ] && ok "old state -> exit 0" || bad "old state -> exit 0" "rc=$RC err=$ERR"
+lacks "old state -> no bootstrap" "bootstrapped" "$OUT$ERR"
+[ ! -s "$TMP/investigated" ] && ok "old state -> nothing investigated" || bad "old state -> nothing investigated" "$(cat "$TMP/investigated")"
+
+# 16. The core runs any adapter that honours the contract.
+cat > "$TMP/fake.sh" <<'EOF2'
+#!/usr/bin/env bash
+cat "$FAKE_OUT"
+EOF2
+export FAKE_OUT="$TMP/fake.jsonl"
+fake_line() { # fake_line <id> <ref>
+  jq -nc --arg id "$1" --arg ref "$2" '{id:$id, ref:$ref, url:("https://pager.example/" + $ref), state:"firing", severity:"critical",
+    alert:{alertname:"FakeAlert", severity:"critical", summary:"s", description:"d", labels:{cluster:"cf", node:"nf"}, starts_at:"2026-10-25T09:04:00Z"}}'
+}
+S16="$TMP/state-fake"; OB16="$TMP/outbox-fake"
+fake_line F0 70 > "$FAKE_OUT"
+run_poll STATE_DIR="$S16" OUTBOX_DIR="$OB16" ONCALL_PAGER=fake ONCALL_PAGER_ADAPTER="$TMP/fake.sh"
+{ fake_line F0 70; fake_line F1 77; } > "$FAKE_OUT"
+: > "$TMP/investigated"
+run_poll STATE_DIR="$S16" OUTBOX_DIR="$OB16" ONCALL_PAGER=fake ONCALL_PAGER_ADAPTER="$TMP/fake.sh"
+check "fake adapter -> log names the provider and ref" "fake #77" "$(cat "$S16/briefs.log" 2>&1)"
+jq -e '.pager == "fake" and .id == "F1" and .ref == "77" and .url == "https://pager.example/77" and (has("irm_id") | not) and (has("irm_number") | not)' "$OB16/F1.json" >/dev/null && ok "fake adapter -> event has pager keys, no irm_ keys" || bad "fake adapter -> event has pager keys, no irm_ keys" "$(cat "$OB16/F1.json" 2>&1)"
+jq -e '.label == "fake" and .pager == "fake" and .ref == "77"' <<< "$(tail -n 1 "$TMP/investigated")" >/dev/null && ok "fake adapter -> investigated line carries label" || bad "fake adapter -> investigated line carries label" "$(cat "$TMP/investigated")"
+
+# 17. An unknown pager is a configuration error, not an empty poll.
+run_poll STATE_DIR="$TMP/state-nope" ONCALL_PAGER=nope
+[ "$RC" -eq 1 ] && ok "unknown pager -> exit 1" || bad "unknown pager -> exit 1" "rc=$RC"
+check "unknown pager -> says so on stderr" "no adapter for ONCALL_PAGER=nope" "$ERR"
+
+# 18. A shell's own PAGER (less, bat...) must not select the adapter.
+S18="$TMP/state-shellpager"
+set_groups "$(group P1 601 acknowledged NvlinkDown c40 warning)"
+run_poll STATE_DIR="$S18" PAGER=less
+set_groups "$(group P2 602 new GpuFellOff c40 critical)" "$(group P1 601 acknowledged NvlinkDown c40 warning)"
+run_poll STATE_DIR="$S18" PAGER=less
+check "shell PAGER=less -> irm adapter still used" "IRM #602" "$(cat "$S18/briefs.log" 2>&1)"
+
+# 19. Groups IRM lists without alert detail must not fail the poll: no alerts
+#     key, a null last_alert, and no alert_group_number. The first two have no
+#     severity, so the filter skips them; the third is investigated and still
+#     gets an event, with a null irm_number.
+S19="$TMP/state-odd"; OB19="$TMP/outbox-odd"
+odd_noalerts=$(group O1 701 new X c50 critical | jq -c 'del(.last_alert.payload.alerts) | del(.last_alert.payload.commonLabels)')
+odd_nulllast=$(group O2 702 new X c50 critical | jq -c '.last_alert = null')
+set_groups "$(group O0 700 acknowledged Old c50 warning)"
+run_poll STATE_DIR="$S19" OUTBOX_DIR="$OB19"
+set_groups "$(group O3 703 new OddOk c50 critical | jq -c 'del(.alert_group_number)')" "$odd_nulllast" "$odd_noalerts" "$(group O0 700 acknowledged Old c50 warning)"
+: > "$TMP/investigated"
+run_poll STATE_DIR="$S19" OUTBOX_DIR="$OB19"
+[ "$RC" -eq 0 ] && ok "odd groups -> poll succeeds" || bad "odd groups -> poll succeeds" "rc=$RC err=$ERR"
+[ "$(wc -l < "$TMP/investigated" | tr -d ' ')" = 1 ] && check "odd groups -> only the normal group investigated" '"alertname":"OddOk"' "$(cat "$TMP/investigated")" || bad "odd groups -> only the normal group investigated" "$(cat "$TMP/investigated")"
+jq -e '.irm_number == null and .id == "O3" and .irm_id == "O3"' "$OB19/O3.json" >/dev/null && ok "no group number -> event written, irm_number null" || bad "no group number -> event written, irm_number null" "$(cat "$OB19/O3.json" 2>&1)"
+[ -z "$(ls "$OB19"/*.tmp 2>/dev/null)" ] && ok "no group number -> no temp file left" || bad "no group number -> no temp file left" "$(ls "$OB19")"
+: > "$TMP/investigated"
+run_poll STATE_DIR="$S19" OUTBOX_DIR="$OB19"
+[ "$RC" -eq 0 ] && [ ! -s "$TMP/investigated" ] && ok "odd groups -> not revisited" || bad "odd groups -> not revisited" "rc=$RC $(cat "$TMP/investigated")"
+
+# 20. One group with a payload of the wrong shape must not fail the poll for
+#     everyone: it is recorded as seen and dropped, the others are processed.
+#     A body that is not alert groups at all is still an error.
+S20="$TMP/state-shapes"
+set_groups "$(group W0 800 acknowledged Old c60 warning)"
+run_poll STATE_DIR="$S20"
+w1=$(group W1 801 new X c60 critical | jq -c '.last_alert.payload = "just a string"')
+w2=$(group W2 802 new X c60 critical | jq -c '.last_alert.payload.alerts = {"a": 1}')
+w3=$(group W3 803 new X c60 critical | jq -c '.last_alert.payload.alerts = ["x"] | del(.last_alert.payload.commonLabels)')
+w4=$(group W4 804 new X c60 critical | jq -c '.last_alert.payload.alerts[0].labels = "str" | del(.last_alert.payload.commonLabels)')
+set_groups "$(group W5 805 new ShapeOk c60 critical)" "$w4" "$w3" "$w2" "$w1" "$(group W0 800 acknowledged Old c60 warning)"
+: > "$TMP/investigated"
+run_poll STATE_DIR="$S20"
+[ "$RC" -eq 0 ] && ok "odd shapes -> poll succeeds" || bad "odd shapes -> poll succeeds" "rc=$RC err=$ERR"
+[ "$(wc -l < "$TMP/investigated" | tr -d ' ')" = 1 ] && check "odd shapes -> only the normal group investigated" '"alertname":"ShapeOk"' "$(cat "$TMP/investigated")" || bad "odd shapes -> only the normal group investigated" "$(cat "$TMP/investigated")"
+: > "$TMP/investigated"
+run_poll STATE_DIR="$S20"
+[ "$RC" -eq 0 ] && [ ! -s "$TMP/investigated" ] && ok "odd shapes -> not revisited" || bad "odd shapes -> not revisited" "rc=$RC $(cat "$TMP/investigated")"
+echo '{"detail": "not alert groups"}' > "$TMP/groups.json"
+run_poll STATE_DIR="$S20"
+[ "$RC" -eq 1 ] && ok "body without results -> exit 1" || bad "body without results -> exit 1" "rc=$RC"
+[ "$(printf '%s\n' "$ERR" | grep -c .)" = 1 ] && check "body without results -> one error line" "error: IRM alert_groups returned a body that is not alert groups" "$ERR" || bad "body without results -> one error line" "$ERR"
 
 echo
 echo "$PASS passed, $FAIL failed"
