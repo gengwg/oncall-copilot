@@ -153,12 +153,16 @@ in the environment, or the incident sync cannot publish new reports.
 ## Testing
 
 ```bash
-# unit + race (demo-app chaos state, alert-relay queue and auth)
-(cd demo-app && go test -race ./...)
-(cd alert-relay && go test -race ./...)
+# unit + race, one Go module per directory (what CI runs)
+for d in alert-relay demo-app deploy/dashboard slack-agent; do
+  (cd $d && test -z "$(gofmt -l .)" && go vet ./... && go test -race ./...)
+done
 
 # investigator against a real relay + stub Prometheus/Loki/inference
 ./tests/investigate_test.sh
+# evidence query scripts and the IRM poller, against stubs
+./tests/query_scripts_test.sh
+./tests/irm_poll_test.sh
 
 # end-to-end: chaos -> alert -> relay -> evidence -> Nemotron RCA -> report
 RELAY_LOG=/tmp/opencode/relay-host.out COPILOT_ASSERT=1 ./tests/e2e/run.sh
