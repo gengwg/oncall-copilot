@@ -33,14 +33,14 @@ STATE_DIR="${STATE_DIR:-$HOME/.local/state/oncall-copilot}"
 # Health events for the daily digest, read by another user's agent: one
 # "<UTC time>\t<kind>\t<detail>" line each. Also used before the lock and
 # before the state dir exists, so it makes the dir and takes no lock. Bounded
-# here so every writer keeps the file short. A failed write never changes an
+# here (last 3000 lines, about two days of a failing poller) so every writer keeps the file short. A failed write never changes an
 # exit code. Details must never carry the heartbeat URL (it holds a secret).
 health_event() { # health_event <poll-failed|ping-failed|held|gap> <detail>
   local f="$STATE_DIR/health.log"
   mkdir -p "$STATE_DIR" 2>/dev/null || return 0
   printf '%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" \
     "$(printf '%s' "$2" | tr '\t\r\n' '   ' | cut -c1-300)" >> "$f" 2>/dev/null || return 0
-  tail -n 500 "$f" > "$f.tmp" 2>/dev/null && mv "$f.tmp" "$f"
+  tail -n 3000 "$f" > "$f.tmp" 2>/dev/null && mv "$f.tmp" "$f"
   return 0
 }
 

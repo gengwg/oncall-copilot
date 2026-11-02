@@ -442,11 +442,11 @@ set_groups "$(group H0 900 acknowledged Old c70 warning)"
 run_poll STATE_DIR="$H12" HEARTBEAT_URL="$HB21"
 [ -s "$H12/last-ok" ] && [ ! -s "$H12/health.log" ] && ok "health: first run after deploy -> last-ok, no gap" || bad "health: first run after deploy -> last-ok, no gap" "$(hlog "$H12")"
 
-# (g) health.log is trimmed to its last 500 lines.
+# (g) health.log is trimmed to its last 3000 lines.
 H13="$TMP/state-h13"; mk_state "$H13"
-for i in $(seq 600); do printf '2026-11-01T00:00:00Z\tgap\told %s\n' "$i"; done > "$H13/health.log"
+for i in $(seq 3100); do printf '2026-11-01T00:00:00Z\tgap\told %s\n' "$i"; done > "$H13/health.log"
 run_poll STATE_DIR="$H13" GRAFANA_TOKEN=wrong
-[ "$(wc -l < "$H13/health.log" | tr -d ' ')" = 500 ] && ok "health: health.log trimmed to 500 lines" || bad "health: health.log trimmed to 500 lines" "$(wc -l < "$H13/health.log")"
+[ "$(wc -l < "$H13/health.log" | tr -d ' ')" = 3000 ] && ok "health: health.log trimmed to 3000 lines" || bad "health: health.log trimmed to 3000 lines" "$(wc -l < "$H13/health.log")"
 check "health: trim keeps the newest line" "poll-failed" "$(tail -n 1 "$H13/health.log")"
 lacks "health: trim drops the oldest line" "old 1"$'\n' "$(head -n 1 "$H13/health.log")"$'\n'
 
