@@ -56,9 +56,9 @@ across upstream providers).
 This is open item 1 in the status doc, and the gate for A3. The briefs log has
 every verdict. Nobody has scored them yet.
 
-- Write a small script that joins the briefs log's verdicts with what IRM
-  recorded for the same alert group (acked by whom and when, resolved, time to
-  resolve) and prints each `hold` that a human then acted on before morning.
+- `alert-relay/score-verdicts.sh` joins the briefs log's verdicts with what IRM
+  recorded for the same alert group and lists each `hold` a human then acted
+  on. How to run it and read the output is in open item 1 of the status doc.
 - Run it over the shadow window since 2026-10-25, then weekly.
 - Exit: across all paging alerts in at least two weeks of shadow, zero `hold`
   verdicts on alerts that needed someone before morning. Record the false-page
