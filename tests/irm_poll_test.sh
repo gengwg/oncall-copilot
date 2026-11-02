@@ -279,7 +279,7 @@ cat "$FAKE_OUT"
 EOF2
 export FAKE_OUT="$TMP/fake.jsonl"
 fake_line() { # fake_line <id> <ref>
-  jq -nc --arg id "$1" --arg ref "$2" '{id:$id, ref:$ref, url:"https://pager.example/" + $ref, state:"firing", severity:"critical",
+  jq -nc --arg id "$1" --arg ref "$2" '{id:$id, ref:$ref, url:("https://pager.example/" + $ref), state:"firing", severity:"critical",
     alert:{alertname:"FakeAlert", severity:"critical", summary:"s", description:"d", labels:{cluster:"cf", node:"nf"}, starts_at:"2026-10-25T09:04:00Z"}}'
 }
 S16="$TMP/state-fake"; OB16="$TMP/outbox-fake"
