@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +19,8 @@ const (
 	window = 24 * time.Hour
 	// The poller runs every minute; past this, a missing success means it is down now.
 	staleAfter = 10 * time.Minute
+	// Longest silence inside a problem that still counts as the poller running.
+	maxQuiet = 10 * time.Minute
 )
 
 type event struct {
@@ -157,20 +160,35 @@ func parseGap(detail string) (mins int, since time.Time) {
 	return mins, since
 }
 
-// covered reports whether a problem line lies inside [since, end], and whether
-// one of them is a hold, whose length is the hold's duration.
+// covered reports whether problem lines account for a gap: none of the
+// stretches between since, consecutive problem lines and end is longer than
+// maxQuiet, so some run was reporting throughout. A longer silence is a real
+// stop. hold says a held line is among them, so the gap's length is the hold's
+// duration.
 func covered(evs []event, since, end time.Time) (covers, hold bool) {
 	if since.IsZero() {
 		return false, false
 	}
+	var in []time.Time
 	for _, e := range evs {
 		if e.kind == "gap" || e.at.Before(since) || e.at.After(end) {
 			continue
 		}
-		covers = true
+		in = append(in, e.at)
 		hold = hold || e.kind == "held"
 	}
-	return covers, hold
+	if len(in) == 0 {
+		return false, false
+	}
+	sort.Slice(in, func(i, j int) bool { return in[i].Before(in[j]) })
+	prev := since
+	for _, t := range append(in, end) {
+		if t.Sub(prev) > maxQuiet {
+			return false, false
+		}
+		prev = t
+	}
+	return true, hold
 }
 
 func plural(n int, noun string) string {

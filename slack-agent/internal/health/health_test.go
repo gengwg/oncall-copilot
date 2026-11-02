@@ -147,7 +147,7 @@ func TestGapCoveringFailedPollsOrPingsIsThatProblem(t *testing.T) {
 			line(3*time.Hour, tc.kind, tc.detail),
 			line(3*time.Hour-time.Minute, tc.kind, tc.detail),
 			line(3*time.Hour-2*time.Minute, tc.kind, tc.detail),
-			line(2*time.Hour+45*time.Minute, "gap", "17 min since "+ts(3*time.Hour+2*time.Minute)),
+			line(2*time.Hour+56*time.Minute, "gap", "9 min since "+ts(3*time.Hour+5*time.Minute)),
 		}
 		got := Poller(state(t, ts(time.Minute), lines), now)
 		if !strings.HasPrefix(got, tc.want) || strings.Contains(got, "gap") {
@@ -168,6 +168,52 @@ func TestGapWithNoProblemLineInItsSpanIsAGap(t *testing.T) {
 	want := "poller: 1 failed poll, 1 failed ping, 1 gap (longest 62 min) in the last 24h (last: " + ts(2*time.Hour) + " gap 62 min since " + ts(3*time.Hour+2*time.Minute) + ")"
 	if got != want {
 		t.Fatalf("got  %q\nwant %q", got, want)
+	}
+}
+
+// A problem line explains a gap only while it keeps the span covered: a stop
+// that begins after the last problem line is a real stop.
+func TestStopAfterProblemLinesIsStillAGap(t *testing.T) {
+	stop := func(n int, kind string) []string {
+		var l []string
+		for i := 0; i < n; i++ {
+			l = append(l, line(4*time.Hour-time.Duration(i)*time.Minute, kind, "x"))
+		}
+		// last problem line at 4h-(n-1)min; the stop runs until 59 min ago.
+		since := ts(4*time.Hour - time.Duration(n-1)*time.Minute)
+		return append(l, line(time.Hour, "gap", "181 min since "+since))
+	}
+	for _, tc := range []struct {
+		name, kind string
+		n          int
+		want       string
+	}{
+		{"one poll-failed", "poll-failed", 1, "poller: 1 failed poll, 1 gap (longest 181 min) in"},
+		{"one ping-failed", "ping-failed", 1, "poller: 1 failed ping, 1 gap (longest 181 min) in"},
+		{"ten minutes of token expiry", "poll-failed", 10, "poller: 10 failed polls, 1 gap (longest 181 min) in"},
+		{"one held", "held", 1, "poller: heartbeat held for 1 run, 1 gap (longest 181 min) in"},
+	} {
+		got := Poller(state(t, ts(time.Minute), stop(tc.n, tc.kind)), now)
+		if !strings.HasPrefix(got, tc.want) {
+			t.Fatalf("%s: got %q", tc.name, got)
+		}
+	}
+}
+
+func TestGapCoverageBoundaryIs600Seconds(t *testing.T) {
+	for _, tc := range []struct {
+		uncovered time.Duration
+		gap       bool
+	}{{600 * time.Second, false}, {601 * time.Second, true}} {
+		end := 3 * time.Hour
+		lines := []string{
+			line(end+tc.uncovered, "poll-failed", "x"),
+			line(end, "gap", "20 min since "+ts(end+tc.uncovered+time.Minute)),
+		}
+		got := Poller(state(t, ts(time.Minute), lines), now)
+		if has := strings.Contains(got, "1 gap"); has != tc.gap {
+			t.Fatalf("%v uncovered: got %q", tc.uncovered, got)
+		}
 	}
 }
 
