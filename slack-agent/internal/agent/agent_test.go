@@ -439,10 +439,11 @@ func TestSentReplyKeepsTheWindowOfWhatWasDrafted(t *testing.T) {
 		first   dcrequest.Status
 		wait    time.Duration
 		wantRun bool
+		days    string
 	}{
-		{dcrequest.FollowupDrafted, 8 * 24 * time.Hour, true},
-		{dcrequest.FollowupDrafted, 6 * 24 * time.Hour, false},
-		{dcrequest.Drafted, 8 * 24 * time.Hour, false},
+		{dcrequest.FollowupDrafted, 8 * 24 * time.Hour, true, "7 days"},
+		{dcrequest.FollowupDrafted, 6 * 24 * time.Hour, false, "7 days"},
+		{dcrequest.Drafted, 8 * 24 * time.Hour, false, "14 days"},
 	}
 	for _, c := range cases {
 		h := newHarness(t, myShift)
@@ -451,6 +452,10 @@ func TestSentReplyKeepsTheWindowOfWhatWasDrafted(t *testing.T) {
 		h.put(first)
 		h.tick()
 		h.a.HandleInbound(context.Background(), slackio.Inbound{ThreadTS: "ts1", Text: "sent"})
+		wantReply := fmt.Sprintf("Noted: DC request for %s/%s sent. No new draft for this node for %s unless you reply `file`.", first.Cluster, first.Node, c.days)
+		if got := h.poster.lastReply(); !strings.HasSuffix(got, wantReply) {
+			t.Errorf("%s then sent: reply %q, want %q", c.first, got, wantReply)
+		}
 		clock := now.Add(c.wait)
 		h.a.Now = func() time.Time { return clock }
 		e2 := withDraft(ev("G2", 2, "critical", clock))

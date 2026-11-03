@@ -635,9 +635,9 @@ func (a *Agent) HandleInbound(ctx context.Context, in slackio.Inbound) {
 		reply(in.ThreadTS, fmt.Sprintf("Drafting the DC request for %s/%s now; this takes a few minutes.", ev.Cluster, ev.Node))
 	case "sent":
 		// A sent follow-up stays on the 7-day rhythm; only a fresh request earns 14 days.
-		status := "sent"
+		status, days := "sent", 14
 		if rec.DCStatus == "followup_drafted" {
-			status = "followup_sent"
+			status, days = "followup_sent", int(ticketedWindow/(24*time.Hour))
 		}
 		if err := a.Ledger.Append(ledger.Entry{TS: a.now(), Cluster: ev.Cluster, Node: ev.Node, ID: ev.ID, Status: status}); err != nil {
 			reply(in.ThreadTS, "Could not record it as sent: "+err.Error())
@@ -645,7 +645,7 @@ func (a *Agent) HandleInbound(ctx context.Context, in slackio.Inbound) {
 		}
 		rec.DCStatus = status
 		save(rec)
-		reply(in.ThreadTS, fmt.Sprintf("Noted: DC request for %s/%s sent. No new draft for this node for 14 days unless you reply `file`.", ev.Cluster, ev.Node))
+		reply(in.ThreadTS, fmt.Sprintf("Noted: DC request for %s/%s sent. No new draft for this node for %d days unless you reply `file`.", ev.Cluster, ev.Node, days))
 	case "ignore":
 		if err := a.Ledger.Append(ledger.Entry{TS: a.now(), Cluster: ev.Cluster, Node: ev.Node, ID: ev.ID, Status: "ignored"}); err != nil {
 			reply(in.ThreadTS, "Could not record the ignore: "+err.Error())
