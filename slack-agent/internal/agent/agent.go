@@ -15,6 +15,7 @@ import (
 
 	"github.com/gengwg/oncall-copilot/slack-agent/internal/dcrequest"
 	"github.com/gengwg/oncall-copilot/slack-agent/internal/event"
+	"github.com/gengwg/oncall-copilot/slack-agent/internal/health"
 	"github.com/gengwg/oncall-copilot/slack-agent/internal/ledger"
 	"github.com/gengwg/oncall-copilot/slack-agent/internal/oncall"
 	"github.com/gengwg/oncall-copilot/slack-agent/internal/outbox"
@@ -67,6 +68,16 @@ type Agent struct {
 	DigestAt     string
 	DigestTZ     *time.Location
 	DigestMarker string
+	// PollerStateDir holds the poller's health files; "" leaves poller health
+	// out of the digest. FailedPings and SkippedPings return and reset the
+	// counts of this agent's failed and skipped (tick error) heartbeat pings;
+	// nil means none. RestorePings puts them back when the digest post fails, so
+	// a retry still reports them. The counts live in memory, so a restart
+	// forgets them: the digest undercounts, never overcounts.
+	PollerStateDir string
+	FailedPings    func() int
+	SkippedPings   func() int
+	RestorePings   func(failed, skipped int)
 
 	dcJobs chan dcJob
 }
@@ -184,8 +195,15 @@ func (a *Agent) digest(ctx context.Context) error {
 			recs = append(recs, r)
 		}
 	}
+	healthText, failed, skipped := a.healthLines(now)
+	restore := func() {
+		if a.RestorePings != nil {
+			a.RestorePings(failed, skipped)
+		}
+	}
 	if len(recs) > 0 {
 		var b strings.Builder
+		b.WriteString(healthText)
 		fmt.Fprintf(&b, "*Overnight digest: %d brief(s) on other shifts, none acked by me.*\n", len(recs))
 		for _, r := range recs {
 			ev := r.Event
@@ -199,6 +217,7 @@ func (a *Agent) digest(ctx context.Context) error {
 			b.WriteString("\n")
 		}
 		if _, err := a.Poster.PostDM(ctx, b.String()); err != nil {
+			restore()
 			return fmt.Errorf("post: %w", err)
 		}
 		for i := range recs {
@@ -207,8 +226,52 @@ func (a *Agent) digest(ctx context.Context) error {
 				return err
 			}
 		}
+	} else if healthText != "" {
+		if _, err := a.Poster.PostDM(ctx, "*Health:*\n"+healthText); err != nil {
+			restore()
+			return fmt.Errorf("post: %w", err)
+		}
 	}
 	return os.WriteFile(a.DigestMarker, []byte(today+"\n"), 0o600)
+}
+
+// healthLines is the digest's problem report, each line newline-terminated,
+// or "" when neither the poller nor this agent's heartbeat had trouble. It also
+// returns the agent ping counts it consumed, for the caller to restore if the
+// report is not delivered.
+func (a *Agent) healthLines(now time.Time) (text string, failed, skipped int) {
+	var b strings.Builder
+	if a.PollerStateDir != "" {
+		if s := health.Poller(a.PollerStateDir, now); s != "" {
+			b.WriteString(s + "\n")
+		}
+	}
+	if a.FailedPings != nil {
+		failed = a.FailedPings()
+	}
+	if a.SkippedPings != nil {
+		skipped = a.SkippedPings()
+	}
+	var parts []string
+	if failed > 0 {
+		parts = append(parts, fmt.Sprintf("%d failed", failed))
+	}
+	if skipped > 0 {
+		parts = append(parts, fmt.Sprintf("%d skipped", skipped))
+	}
+	if len(parts) > 0 {
+		// The noun agrees with the count next to it.
+		last := failed
+		if skipped > 0 {
+			last = skipped
+		}
+		noun := "pings"
+		if last == 1 {
+			noun = "ping"
+		}
+		fmt.Fprintf(&b, "agent: %s heartbeat %s since the last digest\n", strings.Join(parts, " and "), noun)
+	}
+	return b.String(), failed, skipped
 }
 
 // collapse posts one summary for a burst and marks each as reported but not

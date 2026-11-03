@@ -51,7 +51,8 @@ the operator's admin kubeconfigs, in a sandboxed unit (`ProtectHome`,
   README recommends, so a dead shadow service is visible but wakes nobody. The
   poller skips the ping on any failed poll and holds it after two degraded
   briefs in a row (one upstream blip does not alert); once held, it stays held
-  until a healthy brief.
+  until a healthy brief. The 08:05 digest now carries a health line for both
+  services, so a quiet heartbeat channel no longer means problems go unseen.
 - **Acks are narrow, and dry run first.** Only healthy briefs with a hold
   verdict, for paging-severity alerts that fired during the owner's own shift.
   This amended the research doc's "no auto-ack" (§3, 2026-10-31 amendment).

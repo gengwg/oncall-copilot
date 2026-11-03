@@ -45,3 +45,14 @@ func TestConfigIRMVarsRequiredForIRM(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+func TestConfigPollerStateDir(t *testing.T) {
+	c, err := Load(env(t, nil))
+	if err != nil || c.PollerStateDir != "/var/lib/oncall-copilot/.local/state/oncall-copilot" {
+		t.Fatalf("default: %+v %v", c.PollerStateDir, err)
+	}
+	c, err = Load(env(t, map[string]string{"POLLER_STATE_DIR": "/x/state"}))
+	if err != nil || c.PollerStateDir != "/x/state" {
+		t.Fatalf("override: %+v %v", c.PollerStateDir, err)
+	}
+}

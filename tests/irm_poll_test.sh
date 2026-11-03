@@ -348,6 +348,137 @@ run_poll STATE_DIR="$S20"
 [ "$RC" -eq 1 ] && ok "body without results -> exit 1" || bad "body without results -> exit 1" "rc=$RC"
 [ "$(printf '%s\n' "$ERR" | grep -c .)" = 1 ] && check "body without results -> one error line" "error: IRM alert_groups returned a body that is not alert groups" "$ERR" || bad "body without results -> one error line" "$ERR"
 
+# 21. Health events for the daily digest: health.log and last-ok in the state dir.
+HLINE='^[0-9T:-]+Z	(poll-failed|ping-failed|held|gap)	'
+hlog() { cat "$1/health.log" 2>/dev/null; }
+hcount() { grep -c . "$1/health.log" 2>/dev/null || true; }
+mk_state() { # mk_state <dir>: a bootstrapped state dir, no heartbeat
+  set_groups "$(group H0 900 acknowledged Old c70 warning)"
+  run_poll STATE_DIR="$1"
+}
+HB21="http://127.0.0.1:$PORT/heartbeat/s3cret21"
+ago() { # ago <minutes> <file>: last-ok content and mtime that many minutes in the past
+  local t; t=$(date -u -d "$1 minutes ago" +%Y-%m-%dT%H:%M:%SZ)
+  printf '%s\n' "$t" > "$2"; touch -d "$t" "$2"
+}
+
+# (a) A successful, unheld poll writes last-ok and no health line.
+H1="$TMP/state-h1"; mk_state "$H1"
+rm -f "$H1/last-ok"
+run_poll STATE_DIR="$H1" HEARTBEAT_URL="$HB21"
+[ -s "$H1/last-ok" ] && grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$' "$H1/last-ok" && ok "health: successful ping -> last-ok written" || bad "health: successful ping -> last-ok written" "$(cat "$H1/last-ok" 2>&1)"
+[ ! -s "$H1/health.log" ] && ok "health: successful ping -> no health line" || bad "health: successful ping -> no health line" "$(hlog "$H1")"
+
+# (a2) Without HEARTBEAT_URL a successful, unheld run still reports health.
+H2="$TMP/state-h2"; mk_state "$H2"
+rm -f "$H2/last-ok"
+run_poll STATE_DIR="$H2" HEARTBEAT_URL=
+[ -s "$H2/last-ok" ] && ok "health: no heartbeat URL -> last-ok still written" || bad "health: no heartbeat URL -> last-ok still written" "rc=$RC"
+
+# (b) A refused token is a poll-failed line with the HTTP code; last-ok stays.
+H3="$TMP/state-h3"; mk_state "$H3"; ago 3 "$H3/last-ok"
+before=$(cat "$H3/last-ok")
+run_poll STATE_DIR="$H3" HEARTBEAT_URL="$HB21" GRAFANA_TOKEN=wrong
+[ "$RC" -eq 1 ] && ok "health: refused token -> still exit 1" || bad "health: refused token -> still exit 1" "rc=$RC"
+[ "$(hcount "$H3")" = 1 ] && check "health: refused token -> one poll-failed line with HTTP 401" "poll-failed	adapter irm: error: IRM alert_groups returned HTTP 401" "$(hlog "$H3")" || bad "health: refused token -> one poll-failed line" "$(hlog "$H3")"
+[ "$(cat "$H3/last-ok")" = "$before" ] && ok "health: refused token -> last-ok unchanged" || bad "health: refused token -> last-ok unchanged" "$(cat "$H3/last-ok")"
+check "health: refused token -> stderr text unchanged" "error: IRM alert_groups returned HTTP 401" "$ERR"
+
+# (c) An unreachable heartbeat endpoint is a ping-failed line, no last-ok.
+H4="$TMP/state-h4"; mk_state "$H4"; rm -f "$H4/last-ok"
+run_poll STATE_DIR="$H4" HEARTBEAT_URL="http://127.0.0.1:9/heartbeat/s3cret-down"
+[ "$(hcount "$H4")" = 1 ] && check "health: unreachable heartbeat -> one ping-failed line" "ping-failed	curl exit" "$(hlog "$H4")" || bad "health: unreachable heartbeat -> one ping-failed line" "$(hlog "$H4")"
+[ ! -e "$H4/last-ok" ] && ok "health: failed ping -> last-ok not written" || bad "health: failed ping -> last-ok not written" "present"
+
+# (d) Two degraded briefs in a row hold the ping and write a held line on the second run.
+H5="$TMP/state-h5"; mk_state "$H5"
+set_groups "$(group H5a 910 new ModelDownA c71 critical)" "$(group H0 900 acknowledged Old c70 warning)"
+run_poll STATE_DIR="$H5" HEARTBEAT_URL="$HB21"
+[ ! -s "$H5/health.log" ] && ok "health: one degraded brief -> no held line" || bad "health: one degraded brief -> no held line" "$(hlog "$H5")"
+set_groups "$(group H5b 911 new ModelDownB c72 critical)" "$(group H5a 910 new ModelDownA c71 critical)" "$(group H0 900 acknowledged Old c70 warning)"
+run_poll STATE_DIR="$H5" HEARTBEAT_URL="$HB21"
+[ "$(hcount "$H5")" = 1 ] && check "health: two degraded in a row -> held line with the reason" "held	" "$(hlog "$H5")" || bad "health: two degraded in a row -> held line" "$(hlog "$H5")"
+check "health: held line carries the reason" "model call failed" "$(hlog "$H5")"
+# Seeded 30 min old so an advance (or a gap line) cannot hide in the same second.
+ago 30 "$H5/last-ok"; H5b_ok=$(cat "$H5/last-ok")
+gaps_before=$(grep -c '	gap	' "$H5/health.log")
+run_poll STATE_DIR="$H5" HEARTBEAT_URL="$HB21"
+[ "$(cat "$H5/last-ok")" = "$H5b_ok" ] && ok "health: held -> last-ok not advanced" || bad "health: held -> last-ok not advanced" "$(cat "$H5/last-ok" 2>&1)"
+[ "$(grep -c '	gap	' "$H5/health.log")" = "$gaps_before" ] && ok "health: held -> no gap line" || bad "health: held -> no gap line" "$(hlog "$H5")"
+
+# (e) An unknown pager is a poll-failed line, even though the state dir does not exist yet.
+H6="$TMP/state-h6-new"
+run_poll STATE_DIR="$H6" ONCALL_PAGER=nope
+check "health: unknown pager -> poll-failed line" "poll-failed	no adapter for ONCALL_PAGER=nope" "$(hlog "$H6")"
+check "health: unknown pager -> stderr text unchanged" "error: no adapter for ONCALL_PAGER=nope" "$ERR"
+[ "$RC" -eq 1 ] && ok "health: unknown pager -> still exit 1" || bad "health: unknown pager -> still exit 1" "rc=$RC"
+
+# Output that is not JSONL, and an adapter that dies silently, are poll-failed too.
+printf '#!/usr/bin/env bash\necho not-json\n' > "$TMP/badjson.sh"
+printf '#!/usr/bin/env bash\nexit 3\n' > "$TMP/silentdie.sh"
+H7="$TMP/state-h7"
+run_poll STATE_DIR="$H7" ONCALL_PAGER=bad ONCALL_PAGER_ADAPTER="$TMP/badjson.sh"
+check "health: non-JSONL -> poll-failed line" "poll-failed	adapter bad printed output that is not JSONL" "$(hlog "$H7")"
+check "health: non-JSONL -> stderr text unchanged" "error: adapter bad printed output that is not JSONL" "$ERR"
+run_poll STATE_DIR="$H7" ONCALL_PAGER=bad ONCALL_PAGER_ADAPTER="$TMP/silentdie.sh"
+[ "$RC" -eq 1 ] && check "health: silent adapter failure -> poll-failed with exit code" "poll-failed	adapter bad: exit 3" "$(hlog "$H7")" || bad "health: silent adapter failure -> exit 1" "rc=$RC"
+
+# (f) A gap is written on the first successful ping after more than 10 minutes.
+H8="$TMP/state-h8"; mk_state "$H8"; ago 30 "$H8/last-ok"
+run_poll STATE_DIR="$H8" HEARTBEAT_URL="$HB21"
+[ "$(hcount "$H8")" = 1 ] && check "health: 30 min without a ping -> gap line naming 30 min" "gap	30 min since " "$(hlog "$H8")" || bad "health: 30 min gap -> one gap line" "$(hlog "$H8")"
+H9="$TMP/state-h9"; mk_state "$H9"; ago 5 "$H9/last-ok"
+run_poll STATE_DIR="$H9" HEARTBEAT_URL="$HB21"
+[ ! -s "$H9/health.log" ] && ok "health: 5 min since the last ping -> no gap line" || bad "health: 5 min since the last ping -> no gap line" "$(hlog "$H9")"
+# Unparseable last-ok contents fall back to the file's mtime.
+H10="$TMP/state-h10"; mk_state "$H10"; ago 30 "$H10/last-ok"; echo garbage > "$H10/last-ok"; touch -d "30 minutes ago" "$H10/last-ok"
+run_poll STATE_DIR="$H10" HEARTBEAT_URL="$HB21"
+check "health: unparseable last-ok -> gap from mtime" "gap	30 min since " "$(hlog "$H10")"
+# The gap also shows on a host without a heartbeat URL.
+H11="$TMP/state-h11"; mk_state "$H11"; ago 62 "$H11/last-ok"
+run_poll STATE_DIR="$H11" HEARTBEAT_URL=
+check "health: no heartbeat URL -> gap line too" "gap	62 min since " "$(hlog "$H11")"
+
+# A slow but healthy run is not a gap: last-ok 595 s old plus an 8 s adapter ends
+# 603 s later, but the poller was only absent for 595 s.
+printf '#!/usr/bin/env bash\nsleep 8\nexec bash "%s/alert-relay/pagers/irm.sh"\n' "$ROOT" > "$TMP/slow.sh"
+H15="$TMP/state-h15"; mk_state "$H15"
+t=$(date -u -d "595 seconds ago" +%Y-%m-%dT%H:%M:%SZ); printf '%s\n' "$t" > "$H15/last-ok"
+run_poll STATE_DIR="$H15" HEARTBEAT_URL="$HB21" ONCALL_PAGER=slow ONCALL_PAGER_ADAPTER="$TMP/slow.sh"
+[ "$RC" -eq 0 ] && [ ! -s "$H15/health.log" ] && ok "health: slow healthy run -> no gap line" || bad "health: slow healthy run -> no gap line" "rc=$RC $(hlog "$H15")"
+# A real stop still shows, whatever the run's own length.
+H16="$TMP/state-h16"; mk_state "$H16"; ago 30 "$H16/last-ok"
+run_poll STATE_DIR="$H16" HEARTBEAT_URL="$HB21" ONCALL_PAGER=slow ONCALL_PAGER_ADAPTER="$TMP/slow.sh"
+check "health: real stop with a slow run -> gap line" "gap	30 min since " "$(hlog "$H16")"
+
+# (i) A fresh state dir's first successful run has no previous last-ok, so no gap.
+H12="$TMP/state-h12"
+set_groups "$(group H0 900 acknowledged Old c70 warning)"
+run_poll STATE_DIR="$H12" HEARTBEAT_URL="$HB21"
+[ -s "$H12/last-ok" ] && [ ! -s "$H12/health.log" ] && ok "health: first run after deploy -> last-ok, no gap" || bad "health: first run after deploy -> last-ok, no gap" "$(hlog "$H12")"
+
+# A broken state dir (health.log or last-ok is a directory) adds nothing to stderr.
+H14="$TMP/state-h14"; mk_state "$H14"; command rm -rf "$H14/health.log" "$H14/last-ok"; mkdir "$H14/health.log" "$H14/last-ok"
+run_poll STATE_DIR="$H14" HEARTBEAT_URL="$HB21"
+[ "$RC" -eq 0 ] && [ -z "$ERR" ] && ok "health: unwritable health files -> silent, exit 0" || bad "health: unwritable health files -> silent, exit 0" "rc=$RC err=$ERR"
+run_poll STATE_DIR="$H14" HEARTBEAT_URL="http://127.0.0.1:9/heartbeat/x"
+[ "$RC" -eq 0 ] && lacks "health: unwritable health.log on a failed ping -> no extra stderr" "directory" "$ERR" || bad "health: failed ping with broken state -> exit 0" "rc=$RC"
+
+# (g) health.log is trimmed to its last 3000 lines.
+H13="$TMP/state-h13"; mk_state "$H13"
+for i in $(seq 3100); do printf '2026-11-01T00:00:00Z\tgap\told %s\n' "$i"; done > "$H13/health.log"
+run_poll STATE_DIR="$H13" GRAFANA_TOKEN=wrong
+[ "$(wc -l < "$H13/health.log" | tr -d ' ')" = 3000 ] && ok "health: health.log trimmed to 3000 lines" || bad "health: health.log trimmed to 3000 lines" "$(wc -l < "$H13/health.log")"
+check "health: trim keeps the newest line" "poll-failed" "$(tail -n 1 "$H13/health.log")"
+lacks "health: trim drops the oldest line" "old 1"$'\n' "$(head -n 1 "$H13/health.log")"$'\n'
+
+# Every line in every state dir matches the format, and none carries a heartbeat URL.
+all=$(cat "$TMP"/state-h*/health.log)
+bad_lines=$(printf '%s\n' "$all" | grep -vE "$HLINE" | grep -v '	old [0-9]*$' | grep . || true)
+[ -z "$bad_lines" ] && ok "health: every line matches the format" || bad "health: every line matches the format" "$bad_lines"
+lacks "health: no line contains the heartbeat secret" "s3cret" "$all"
+lacks "health: no line contains a heartbeat path" "/heartbeat/" "$all"
+
 echo
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

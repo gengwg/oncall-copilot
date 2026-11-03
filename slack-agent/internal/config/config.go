@@ -23,11 +23,12 @@ type Config struct {
 	IRMScheduleID    string
 	OnCallMe         string
 
-	OutboxDir     string
-	AgentStateDir string
-	ClaudeBin     string
-	ClaudeModel   string
-	MetarepoDir   string
+	OutboxDir      string
+	AgentStateDir  string
+	PollerStateDir string // alert-relay poller's state dir; its health files feed the digest
+	ClaudeBin      string
+	ClaudeModel    string
+	MetarepoDir    string
 
 	AckDryRun    bool
 	CollapseMax  int
@@ -73,6 +74,7 @@ func Load(getenv func(string) string) (Config, error) {
 		OnCallMe:         req("ONCALL_ME"),
 		OutboxDir:        req("OUTBOX_DIR"),
 		AgentStateDir:    opt("AGENT_STATE_DIR", filepath.Join(home, ".local", "state", "oncall-slack-agent")),
+		PollerStateDir:   opt("POLLER_STATE_DIR", "/var/lib/oncall-copilot/.local/state/oncall-copilot"),
 		ClaudeBin:        opt("CLAUDE_BIN", "claude"),
 		ClaudeModel:      opt("CLAUDE_MODEL", ""),
 		MetarepoDir:      req("METAREPO_DIR"),

@@ -51,6 +51,19 @@ The poller pings after each successful poll and holds the ping after two
 degraded briefs in a row; the agent pings after each scan that read the outbox.
 The URL carries a secret and is never logged.
 
+Poller and agent health problems also reach the owner in the 08:05 digest, so
+a quiet channel does not hide them. The poller records failed polls, failed
+pings, held runs and gaps in `health.log` and the time of its last good run in
+`last-ok`, both in its state dir. When there is a problem, the agent adds a line
+for the past 24 hours, a "no healthy run since" line if `last-ok` is more than
+10 minutes old, and its own failed and skipped pings since the last digest; an
+unreadable `last-ok` or `health.log` gives a "poller health unknown" line. A day
+with no briefs still gets a health-only DM, headed `*Health:*`, if there is a
+problem. Health is reported only when the digest is enabled (`DIGEST_AT` set).
+`install.sh` makes the poller's state dir group-readable so the agent can read
+it; `POLLER_STATE_DIR` sets where (default
+`/var/lib/oncall-copilot/.local/state/oncall-copilot`).
+
 ## Order
 
 1. Merge to main first. `install.sh` pulls main into the poller's clone and then
