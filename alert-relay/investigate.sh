@@ -202,6 +202,8 @@ err_logs="${logs:-}"
 # line in a node condition's message, so conditions away from their normal
 # state are the "logs" for hardware faults; these clusters ship no logs to Loki.
 node_info=""
+node_cordoned=""
+node_gpu_fault=""
 node_note=""
 if [ -n "$node" ]; then
   kc="$KUBECONFIG_DIR/$cluster.kubeconfig"
@@ -220,7 +222,8 @@ if [ -n "$node" ]; then
     # named like *Passed / *Healthy / *Completed read the other way round:
     # True is normal, False is the failed check. Without this a node lists
     # every passing check and hides the failed ones.
-    node_info=$("${k[@]}" get node "$node" -o json 2>/dev/null | jq -r --arg cond "$alert_cond" --argjson fired "$start_s" '
+    node_json=$("${k[@]}" get node "$node" -o json 2>/dev/null)
+    node_info=$(printf '%s' "$node_json" | jq -r --arg cond "$alert_cond" --argjson fired "$start_s" '
       def normal: if (.type | test("(Passed|Healthy|OK|Available|Completed)$")) then "True" else "False" end;
       (if $cond == "" then empty else
         ([.status.conditions[]? | select(.type == $cond)] | first) as $c
@@ -240,6 +243,10 @@ if [ -n "$node" ]; then
         | if length == 0 then "abnormal conditions now: none"
           else .[] | "condition " + .type + "=" + .status + ": " + ((.message // .reason // "") | .[0:240]) end)' 2>/dev/null)
     if [ -n "$node_info" ]; then
+      # Containment comes from the node object, never from node_info's text,
+      # which carries condition and event messages verbatim.
+      node_cordoned=$(printf '%s' "$node_json" | jq -r '(.spec.unschedulable // false) | tostring' 2>/dev/null)
+      node_gpu_fault=$(printf '%s' "$node_json" | jq -r 'any(.spec.taints[]?; .key == "aranya.tech/gpu-fault") | tostring' 2>/dev/null)
       pods=$("${k[@]}" get pods -A --field-selector "spec.nodeName=$node" -o json 2>/dev/null \
         | jq -r '"pods on node: " + ([.items[].status.phase] | group_by(.) | map(.[0] + "=" + (length | tostring)) | join(" "))' 2>/dev/null)
       events=$("${k[@]}" get events -A --field-selector "involvedObject.kind=Node,involvedObject.name=$node" -o json 2>/dev/null \
@@ -371,18 +378,20 @@ esac
 # or carrying the gpu-fault taint) never pages. The DC request flow decides
 # whether to file or follow up, so it always gets the draft, whatever the model
 # said about FAULT. No node evidence, an unmapped cluster or any other alert
-# keeps the model's verdict.
+# keeps the model's verdict. The hold only applies once the draft exists, so a
+# hold never points at a flow that did not run.
 prov=""
 [ -r "$DC_PROVIDERS" ] && [ -n "$node" ] && prov=$(awk -F'\t' -v c="$cluster" '$1 == c' "$DC_PROVIDERS" | head -1)
 contained_xid=""
-case "$alertname" in "GPU Xid Critical"*)
+hold_verdict=""
+case "$alertname" in "GPU Xid Critical"|"GPU Xid Critical ("*)
   if [ -n "$prov" ]; then
     reasons=""
-    printf '%s\n' "$node_info" | grep -qx 'cordoned: true' && reasons="node cordoned"
-    printf '%s\n' "$node_info" | grep -E '^taints: ' | grep -qE '(: |, )aranya\.tech/gpu-fault:' && reasons="${reasons:+$reasons, }gpu-fault taint"
+    [ "$node_cordoned" = true ] && reasons="node cordoned"
+    [ "$node_gpu_fault" = true ] && reasons="${reasons:+$reasons, }gpu-fault taint"
     if [ -n "$reasons" ]; then
       contained_xid=1
-      verdict="hold - contained known Xid ($reasons): the DC request flow files a request or follows up on the existing ticket"
+      hold_verdict="hold - contained known Xid ($reasons): the DC request flow files a request or follows up on the existing ticket"
     fi
   fi ;;
 esac
@@ -411,7 +420,7 @@ if [ -n "$DC_DRAFT_DIR" ] && [ -n "$prov" ] && [ -n "$want_draft" ]; then
     printf 'Symptom: %s since %s UTC. %s\n' "$alertname" "${starts_at:-unknown}" "$(printf '%s' "$rootcause" | clip 400)"
     printf 'Node state read %s:\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     printf '%s\n' "$node_info" | sed 's/^/  /'
-    printf '\nRequest: TODO: the specific action (check counters / reseat / replace / open an RMA). Copilot verdict: %s\n' "$verdict"
+    printf '\nRequest: TODO: the specific action (check counters / reseat / replace / open an RMA). Copilot verdict: %s\n' "${hold_verdict:-$verdict}"
     printf 'Say whether the node stays in service. Physical work is the provider'"'"'s; drain belongs to whoever manages the cluster.\n\n'
     printf 'Please open a ticket for this and share the case number.\n\n'
     printf -- '---\nPost to: %s (%s) — %s\n' "$chan" "$chan_id" "$ticket_note"
@@ -419,6 +428,7 @@ if [ -n "$DC_DRAFT_DIR" ] && [ -n "$prov" ] && [ -n "$want_draft" ]; then
     printf '(adds SSH evidence, the IP and provider ID, and the cordon decision, then drafts it in Slack)\n'
   } > "$dc_draft"
 fi
+[ -n "$hold_verdict" ] && [ -s "$dc_draft" ] && verdict="$hold_verdict"
 
 # Latest report for a different alert with the same failure mode: the same
 # kind of failure can surface under another alert name.
