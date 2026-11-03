@@ -16,7 +16,7 @@ type Entry struct {
 	Cluster string
 	Node    string
 	ID      string
-	Status  string // drafted | sent | already_sent | ignored | failed
+	Status  string // drafted | followup_drafted | followup_sent | sent | already_sent | ignored | failed
 }
 
 // Ledger is an append-only TSV: ts, cluster, node, id, status.
@@ -82,7 +82,7 @@ func (l *Ledger) Recent(cluster, node string, since time.Time) (Entry, bool) {
 			continue
 		}
 		switch e.Status {
-		case "drafted", "sent", "already_sent", "ignored":
+		case "drafted", "followup_drafted", "followup_sent", "sent", "already_sent", "ignored":
 			found, ok = e, true
 		}
 	}

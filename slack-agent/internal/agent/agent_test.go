@@ -384,6 +384,91 @@ func TestDCFailureAndAlreadySent(t *testing.T) {
 	}
 }
 
+func TestDCFollowupDrafted(t *testing.T) {
+	h := newHarness(t, myShift)
+	h.runner.res = dcrequest.Result{Status: dcrequest.FollowupDrafted, Detail: "https://slack/thread-1"}
+	first := withDraft(ev("G1", 1, "critical", now))
+	h.put(first)
+	h.tick()
+	want := fmt.Sprintf("Follow-up drafted in the existing thread for %s/%s: https://slack/thread-1. Review and send it from your Slack drafts.", first.Cluster, first.Node)
+	if r := h.rec("G1"); r.DCStatus != "followup_drafted" || !strings.HasSuffix(h.poster.lastReply(), ": "+want) {
+		t.Fatalf("rec=%+v reply=%q", r, h.poster.lastReply())
+	}
+	// It settles the node like a draft: the next alert does not stack another.
+	e2 := withDraft(ev("G2", 2, "critical", now))
+	e2.Node, e2.Cluster = first.Node, first.Cluster
+	h.put(e2)
+	h.tick()
+	if len(h.runner.calls) != 1 || h.rec("G2").DCStatus != "skipped_recent" {
+		t.Fatalf("calls=%v rec=%+v", h.runner.calls, h.rec("G2"))
+	}
+}
+
+func TestLedgerWindowByStatus(t *testing.T) {
+	cases := []struct {
+		status  string
+		age     time.Duration
+		wantRun bool
+	}{
+		{"followup_drafted", 8 * 24 * time.Hour, true},
+		{"followup_drafted", 6 * 24 * time.Hour, false},
+		{"already_sent", 8 * 24 * time.Hour, true},
+		{"already_sent", 6 * 24 * time.Hour, false},
+		{"drafted", 8 * 24 * time.Hour, false},
+		{"drafted", 15 * 24 * time.Hour, true},
+	}
+	for _, c := range cases {
+		h := newHarness(t, myShift)
+		e := withDraft(ev("G1", 1, "critical", now))
+		if err := h.a.Ledger.Append(ledger.Entry{TS: now.Add(-c.age), Cluster: e.Cluster, Node: e.Node, ID: "old", Status: c.status}); err != nil {
+			t.Fatal(err)
+		}
+		h.put(e)
+		h.tick()
+		ran := len(h.runner.calls) == 1
+		if ran != c.wantRun || (!c.wantRun && h.rec("G1").DCStatus != "skipped_recent") {
+			t.Errorf("%s %v ago: ran=%v rec=%+v", c.status, c.age, ran, h.rec("G1"))
+		}
+	}
+}
+
+// A follow-up the owner marks `sent` stays on the 7-day rhythm; a fresh
+// request marked `sent` keeps the 14-day window.
+func TestSentReplyKeepsTheWindowOfWhatWasDrafted(t *testing.T) {
+	cases := []struct {
+		first   dcrequest.Status
+		wait    time.Duration
+		wantRun bool
+		days    string
+	}{
+		{dcrequest.FollowupDrafted, 8 * 24 * time.Hour, true, "7 days"},
+		{dcrequest.FollowupDrafted, 6 * 24 * time.Hour, false, "7 days"},
+		{dcrequest.Drafted, 8 * 24 * time.Hour, false, "14 days"},
+	}
+	for _, c := range cases {
+		h := newHarness(t, myShift)
+		h.runner.res = dcrequest.Result{Status: c.first, Detail: "d"}
+		first := withDraft(ev("G1", 1, "critical", now))
+		h.put(first)
+		h.tick()
+		h.a.HandleInbound(context.Background(), slackio.Inbound{ThreadTS: "ts1", Text: "sent"})
+		wantReply := fmt.Sprintf("Noted: DC request for %s/%s sent. No new draft for this node for %s unless you reply `file`.", first.Cluster, first.Node, c.days)
+		if got := h.poster.lastReply(); !strings.HasSuffix(got, wantReply) {
+			t.Errorf("%s then sent: reply %q, want %q", c.first, got, wantReply)
+		}
+		clock := now.Add(c.wait)
+		h.a.Now = func() time.Time { return clock }
+		e2 := withDraft(ev("G2", 2, "critical", clock))
+		e2.Node, e2.Cluster = first.Node, first.Cluster
+		h.put(e2)
+		h.tick()
+		ran := len(h.runner.calls) == 2
+		if ran != c.wantRun || (!c.wantRun && h.rec("G2").DCStatus != "skipped_recent") {
+			t.Errorf("%s then sent, next alert %v later: ran=%v rec=%+v", c.first, c.wait, ran, h.rec("G2"))
+		}
+	}
+}
+
 func TestIgnoreReplySettlesTheNode(t *testing.T) {
 	h := newHarness(t, myShift)
 	h.put(withDraft(ev("G1", 1, "critical", now)))

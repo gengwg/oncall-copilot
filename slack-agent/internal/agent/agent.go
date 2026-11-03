@@ -47,6 +47,9 @@ const (
 	maxPostAttempts = 3
 	collapseWindow  = 5 * time.Minute
 	ledgerWindow    = 14 * 24 * time.Hour
+	// A follow-up or an already-active ticket is the owner's roughly weekly
+	// check-in, so those results settle a node for less than a new request.
+	ticketedWindow = 7 * 24 * time.Hour
 )
 
 type Agent struct {
@@ -502,7 +505,7 @@ func (a *Agent) runDC(ctx context.Context, j dcJob) error {
 	ev := rec.Event
 	now := a.now()
 	if !j.force {
-		if e, ok := a.Ledger.Recent(ev.Cluster, ev.Node, now.Add(-ledgerWindow)); ok {
+		if e, ok := a.Ledger.Recent(ev.Cluster, ev.Node, now.Add(-ledgerWindow)); ok && !ticketedAndStale(e, now) {
 			rec.DCStatus = "skipped_recent"
 			if err := a.Store.Save(rec); err != nil {
 				return err
@@ -520,6 +523,9 @@ func (a *Agent) runDC(ctx context.Context, j dcJob) error {
 	case dcrequest.Drafted:
 		status = "drafted"
 		msg = fmt.Sprintf("DC request drafted for %s/%s in %s. Review and send it from your Slack drafts. Reply `ignore` if it should not go.", ev.Cluster, ev.Node, orDash(res.Detail))
+	case dcrequest.FollowupDrafted:
+		status = "followup_drafted"
+		msg = fmt.Sprintf("Follow-up drafted in the existing thread for %s/%s: %s. Review and send it from your Slack drafts.", ev.Cluster, ev.Node, orDash(res.Detail))
 	case dcrequest.AlreadySent:
 		status = "already_sent"
 		msg = fmt.Sprintf("DC request for %s/%s already exists: %s. Nothing drafted.", ev.Cluster, ev.Node, orDash(res.Detail))
@@ -540,6 +546,10 @@ func (a *Agent) runDC(ctx context.Context, j dcJob) error {
 		return err
 	}
 	return a.Poster.Reply(ctx, rec.SlackTS, msg)
+}
+
+func ticketedAndStale(e ledger.Entry, now time.Time) bool {
+	return (e.Status == "followup_drafted" || e.Status == "followup_sent" || e.Status == "already_sent") && e.TS.Before(now.Add(-ticketedWindow))
 }
 
 func deref(s *string) string {
@@ -624,13 +634,18 @@ func (a *Agent) HandleInbound(ctx context.Context, in slackio.Inbound) {
 		a.enqueue(dcJob{id: rec.ID, force: true})
 		reply(in.ThreadTS, fmt.Sprintf("Drafting the DC request for %s/%s now; this takes a few minutes.", ev.Cluster, ev.Node))
 	case "sent":
-		if err := a.Ledger.Append(ledger.Entry{TS: a.now(), Cluster: ev.Cluster, Node: ev.Node, ID: ev.ID, Status: "sent"}); err != nil {
+		// A sent follow-up stays on the 7-day rhythm; only a fresh request earns 14 days.
+		status, days := "sent", 14
+		if rec.DCStatus == "followup_drafted" {
+			status, days = "followup_sent", int(ticketedWindow/(24*time.Hour))
+		}
+		if err := a.Ledger.Append(ledger.Entry{TS: a.now(), Cluster: ev.Cluster, Node: ev.Node, ID: ev.ID, Status: status}); err != nil {
 			reply(in.ThreadTS, "Could not record it as sent: "+err.Error())
 			return
 		}
-		rec.DCStatus = "sent"
+		rec.DCStatus = status
 		save(rec)
-		reply(in.ThreadTS, fmt.Sprintf("Noted: DC request for %s/%s sent. No new draft for this node for 14 days unless you reply `file`.", ev.Cluster, ev.Node))
+		reply(in.ThreadTS, fmt.Sprintf("Noted: DC request for %s/%s sent. No new draft for this node for %d days unless you reply `file`.", ev.Cluster, ev.Node, days))
 	case "ignore":
 		if err := a.Ledger.Append(ledger.Entry{TS: a.now(), Cluster: ev.Cluster, Node: ev.Node, ID: ev.ID, Status: "ignored"}); err != nil {
 			reply(in.ThreadTS, "Could not record the ignore: "+err.Error())
