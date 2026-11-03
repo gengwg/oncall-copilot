@@ -53,6 +53,21 @@ the operator's admin kubeconfigs, in a sandboxed unit (`ProtectHome`,
   briefs in a row (one upstream blip does not alert); once held, it stays held
   until a healthy brief. The 08:05 digest now carries a health line for both
   services, so a quiet heartbeat channel no longer means problems go unseen.
+- **A contained known Xid holds, and the DC flow follows up.** A `GPU Xid
+  Critical` alert on a mapped cluster whose node is cordoned or carries the
+  gpu-fault taint gets a hold verdict and always gets a DC draft, whatever the
+  model said. Contained means cordoned or tainted, not necessarily drained (the
+  model prompt still says drained; the override uses cordoned alone, by the
+  owner's decision). If the node already has a ticket thread in the provider
+  channel, the agent drafts a follow-up there when the thread has been quiet for
+  24 hours, and says "already sent" when it has not. Why: on the owner's
+  2026-11-03 shift two Xid alerts paged on faults that were already contained
+  and ticketed; the previous on-call's handoff covered them and the team's Slack
+  Claude app called them known. Limits: a follow-up runs only when the node
+  alerts again, and at most once per node per 14 days (the ledger window);
+  `file` on a brief forces a run. Slack allows one attached draft per channel, so
+  an unsent draft in a provider channel makes the next request or follow-up there
+  fail until it is sent.
 - **Acks are narrow, and dry run first.** Only healthy briefs with a hold
   verdict, for paging-severity alerts that fired during the owner's own shift.
   This amended the research doc's "no auto-ack" (§3, 2026-10-31 amendment).
