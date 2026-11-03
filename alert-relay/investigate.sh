@@ -326,11 +326,21 @@ FAULT: <real|false-alarm> - <why, citing evidence>. false-alarm only if the evid
 VERDICT: <page|hold> - <why, citing evidence>. page if a person must act before morning to stop customer impact or further damage; hold only if the evidence shows it is already contained (node cordoned and drained), cleared, or harmless until business hours. When unsure, page."
 
 ask_model() {
-  jq -n --arg m "$MODEL" --arg p "$prompt" \
+  local resp code content
+  resp=$(jq -n --arg m "$MODEL" --arg p "$prompt" \
     '{model:$m, messages:[{role:"user",content:$p}], max_tokens:1500}' \
-    | curl -sf -m 150 "$INFERENCE_URL" \
+    | curl -sS -m 150 -w '\n%{http_code}' "$INFERENCE_URL" \
         -H "Authorization: Bearer $NEBIUS_API_KEY" -H "Content-Type: application/json" \
-        -d @- 2>/dev/null | jq -r '.choices[0].message.content // "analysis unavailable"'
+        -d @- 2>&1)
+  code=${resp##*$'\n'}; resp=${resp%$'\n'*}
+  content=$(printf '%s' "$resp" | jq -r '.choices[0].message.content // empty' 2>/dev/null)
+  if [ "$code" != 200 ] || [ -z "$content" ]; then
+    # Without the status and body a degraded brief can't tell a spent key
+    # from a bad key or an upstream outage.
+    echo "warn: model call failed (HTTP $code): $(printf '%s' "$resp" | tr '\n' ' ' | head -c 300)" >&2
+    echo "analysis unavailable"; return
+  fi
+  printf '%s\n' "$content"
 }
 # One retry: a single upstream blip would otherwise mark the brief degraded,
 # hold the shadow heartbeat and lose that alert's DC draft.

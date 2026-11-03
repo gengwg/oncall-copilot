@@ -103,6 +103,12 @@ class H(BaseHTTPRequestHandler):
         if os.path.exists(sys.argv[2] + ".failonce"):
             os.remove(sys.argv[2] + ".failonce")
             self.send_response(502); self.end_headers(); return
+        # A <prompt-file>.nocredit flag fails every request the way a router
+        # does when the key's spend limit is used up.
+        if os.path.exists(sys.argv[2] + ".nocredit"):
+            body = b'{"error":{"message":"Key limit exceeded","code":402}}'
+            self.send_response(402); self.send_header('Content-Length', str(len(body))); self.end_headers()
+            self.wfile.write(body); return
         # Nemotron thinks out loud and often echoes the reply template before
         # its real answer; the parser must take the answer, not the template.
         # A <prompt-file>.noverdict flag drops the real VERDICT line, leaving
@@ -491,6 +497,21 @@ curl -sf -m 2 -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$RELAY_PORT/al
 post_alert DemoHighErrorRate
 run_investigate INFERENCE_URL="http://127.0.0.1:9/v1/chat/completions"
 check "model unreachable -> brief marked degraded" "Degraded: model call failed" "$OUT"
+check "model unreachable -> the reason is logged" "model call failed (HTTP 000)" "$ERR"
+
+# A refused call says why on stderr (the poller's investigate.err), so a
+# degraded brief can be told apart: spent key, bad key, or upstream outage.
+curl -sf -m 2 -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$RELAY_PORT/alerts" >/dev/null
+post_alert DemoHighErrorRate
+touch "$TMP/last_prompt.nocredit"
+run_investigate
+rm -f "$TMP/last_prompt.nocredit"
+check "model refuses -> brief marked degraded" "Degraded: model call failed" "$OUT"
+check "model refuses -> status and body logged" 'model call failed (HTTP 402): {"error":{"message":"Key limit exceeded"' "$ERR"
+case "$ERR" in
+  *stub-key*) bad "model refuses -> key not logged" "got: $ERR" ;;
+  *) ok "model refuses -> key not logged" ;;
+esac
 
 # One upstream blip is retried, not turned into a degraded brief.
 curl -sf -m 2 -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$RELAY_PORT/alerts" >/dev/null
