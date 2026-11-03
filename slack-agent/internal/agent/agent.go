@@ -47,6 +47,9 @@ const (
 	maxPostAttempts = 3
 	collapseWindow  = 5 * time.Minute
 	ledgerWindow    = 14 * 24 * time.Hour
+	// A follow-up or an already-active ticket is the owner's roughly weekly
+	// check-in, so those results settle a node for less than a new request.
+	ticketedWindow = 7 * 24 * time.Hour
 )
 
 type Agent struct {
@@ -502,7 +505,7 @@ func (a *Agent) runDC(ctx context.Context, j dcJob) error {
 	ev := rec.Event
 	now := a.now()
 	if !j.force {
-		if e, ok := a.Ledger.Recent(ev.Cluster, ev.Node, now.Add(-ledgerWindow)); ok {
+		if e, ok := a.Ledger.Recent(ev.Cluster, ev.Node, now.Add(-ledgerWindow)); ok && !ticketedAndStale(e, now) {
 			rec.DCStatus = "skipped_recent"
 			if err := a.Store.Save(rec); err != nil {
 				return err
@@ -543,6 +546,10 @@ func (a *Agent) runDC(ctx context.Context, j dcJob) error {
 		return err
 	}
 	return a.Poster.Reply(ctx, rec.SlackTS, msg)
+}
+
+func ticketedAndStale(e ledger.Entry, now time.Time) bool {
+	return (e.Status == "followup_drafted" || e.Status == "already_sent") && e.TS.Before(now.Add(-ticketedWindow))
 }
 
 func deref(s *string) string {

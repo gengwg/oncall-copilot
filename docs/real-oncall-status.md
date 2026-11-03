@@ -64,7 +64,7 @@ the operator's admin kubeconfigs, in a sandboxed unit (`ProtectHome`,
   2026-11-03 shift two Xid alerts paged on faults that were already contained
   and ticketed; the previous on-call's handoff covered them and the team's Slack
   Claude app called them known. Limits: a follow-up runs only when the node
-  alerts again, and at most once per node per 14 days (the ledger window);
+  alerts again, follow-ups and already-active results settle a node for 7 days, new requests for 14 (the ledger windows);
   `file` on a brief forces a run. Slack allows one attached draft per channel, so
   an unsent draft in a provider channel makes the next request or follow-up there
   fail until it is sent.

@@ -404,6 +404,34 @@ func TestDCFollowupDrafted(t *testing.T) {
 	}
 }
 
+func TestLedgerWindowByStatus(t *testing.T) {
+	cases := []struct {
+		status  string
+		age     time.Duration
+		wantRun bool
+	}{
+		{"followup_drafted", 8 * 24 * time.Hour, true},
+		{"followup_drafted", 6 * 24 * time.Hour, false},
+		{"already_sent", 8 * 24 * time.Hour, true},
+		{"already_sent", 6 * 24 * time.Hour, false},
+		{"drafted", 8 * 24 * time.Hour, false},
+		{"drafted", 15 * 24 * time.Hour, true},
+	}
+	for _, c := range cases {
+		h := newHarness(t, myShift)
+		e := withDraft(ev("G1", 1, "critical", now))
+		if err := h.a.Ledger.Append(ledger.Entry{TS: now.Add(-c.age), Cluster: e.Cluster, Node: e.Node, ID: "old", Status: c.status}); err != nil {
+			t.Fatal(err)
+		}
+		h.put(e)
+		h.tick()
+		ran := len(h.runner.calls) == 1
+		if ran != c.wantRun || (!c.wantRun && h.rec("G1").DCStatus != "skipped_recent") {
+			t.Errorf("%s %v ago: ran=%v rec=%+v", c.status, c.age, ran, h.rec("G1"))
+		}
+	}
+}
+
 func TestIgnoreReplySettlesTheNode(t *testing.T) {
 	h := newHarness(t, myShift)
 	h.put(withDraft(ev("G1", 1, "critical", now)))
