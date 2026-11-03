@@ -432,6 +432,38 @@ func TestLedgerWindowByStatus(t *testing.T) {
 	}
 }
 
+// A follow-up the owner marks `sent` stays on the 7-day rhythm; a fresh
+// request marked `sent` keeps the 14-day window.
+func TestSentReplyKeepsTheWindowOfWhatWasDrafted(t *testing.T) {
+	cases := []struct {
+		first   dcrequest.Status
+		wait    time.Duration
+		wantRun bool
+	}{
+		{dcrequest.FollowupDrafted, 8 * 24 * time.Hour, true},
+		{dcrequest.FollowupDrafted, 6 * 24 * time.Hour, false},
+		{dcrequest.Drafted, 8 * 24 * time.Hour, false},
+	}
+	for _, c := range cases {
+		h := newHarness(t, myShift)
+		h.runner.res = dcrequest.Result{Status: c.first, Detail: "d"}
+		first := withDraft(ev("G1", 1, "critical", now))
+		h.put(first)
+		h.tick()
+		h.a.HandleInbound(context.Background(), slackio.Inbound{ThreadTS: "ts1", Text: "sent"})
+		clock := now.Add(c.wait)
+		h.a.Now = func() time.Time { return clock }
+		e2 := withDraft(ev("G2", 2, "critical", clock))
+		e2.Node, e2.Cluster = first.Node, first.Cluster
+		h.put(e2)
+		h.tick()
+		ran := len(h.runner.calls) == 2
+		if ran != c.wantRun || (!c.wantRun && h.rec("G2").DCStatus != "skipped_recent") {
+			t.Errorf("%s then sent, next alert %v later: ran=%v rec=%+v", c.first, c.wait, ran, h.rec("G2"))
+		}
+	}
+}
+
 func TestIgnoreReplySettlesTheNode(t *testing.T) {
 	h := newHarness(t, myShift)
 	h.put(withDraft(ev("G1", 1, "critical", now)))

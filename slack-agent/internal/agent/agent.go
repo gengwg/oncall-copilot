@@ -549,7 +549,7 @@ func (a *Agent) runDC(ctx context.Context, j dcJob) error {
 }
 
 func ticketedAndStale(e ledger.Entry, now time.Time) bool {
-	return (e.Status == "followup_drafted" || e.Status == "already_sent") && e.TS.Before(now.Add(-ticketedWindow))
+	return (e.Status == "followup_drafted" || e.Status == "followup_sent" || e.Status == "already_sent") && e.TS.Before(now.Add(-ticketedWindow))
 }
 
 func deref(s *string) string {
@@ -634,11 +634,16 @@ func (a *Agent) HandleInbound(ctx context.Context, in slackio.Inbound) {
 		a.enqueue(dcJob{id: rec.ID, force: true})
 		reply(in.ThreadTS, fmt.Sprintf("Drafting the DC request for %s/%s now; this takes a few minutes.", ev.Cluster, ev.Node))
 	case "sent":
-		if err := a.Ledger.Append(ledger.Entry{TS: a.now(), Cluster: ev.Cluster, Node: ev.Node, ID: ev.ID, Status: "sent"}); err != nil {
+		// A sent follow-up stays on the 7-day rhythm; only a fresh request earns 14 days.
+		status := "sent"
+		if rec.DCStatus == "followup_drafted" {
+			status = "followup_sent"
+		}
+		if err := a.Ledger.Append(ledger.Entry{TS: a.now(), Cluster: ev.Cluster, Node: ev.Node, ID: ev.ID, Status: status}); err != nil {
 			reply(in.ThreadTS, "Could not record it as sent: "+err.Error())
 			return
 		}
-		rec.DCStatus = "sent"
+		rec.DCStatus = status
 		save(rec)
 		reply(in.ThreadTS, fmt.Sprintf("Noted: DC request for %s/%s sent. No new draft for this node for 14 days unless you reply `file`.", ev.Cluster, ev.Node))
 	case "ignore":

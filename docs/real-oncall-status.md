@@ -61,14 +61,19 @@ the operator's admin kubeconfigs, in a sandboxed unit (`ProtectHome`,
   written; an uncontained node, an unmapped cluster or missing node evidence
   keeps the model's verdict. Contained means cordoned or tainted, not
   necessarily drained: the model prompt still says drained, and the owner chose
-  the cordon-alone scope explicitly (2026-11-03). The Slack agent then looks for
+  the cordon-alone scope explicitly (2026-11-03). The rule assumes that on
+  these clusters only people (or the DC flow after triage) cordon or taint GPU
+  nodes, as the owner confirmed on 2026-11-03; if automatic cordoning is ever
+  introduced (for example a fault-quarantine controller), "contained" must
+  narrow to the `aranya.tech/gpu-fault` taint, which only people apply. The Slack agent then looks for
   the node's ticket thread in the provider channel. If one exists, it drafts a
   follow-up reply there when the thread has been quiet for 24 hours, and
   reports "already exists" when it has not; with no thread it drafts a new
   request. These Slack drafts are separate from the poller's file, and the owner
   sends every one; the agent never does. A drafted request or follow-up settles
   the node in the agent's ledger: follow-ups and already-active results for 7
-  days, new requests for 14. Why: on the owner's 2026-11-03 shift two Xid
+  days, new requests for 14; a follow-up stays on the 7-day rhythm after the
+  owner marks it `sent`. Why: on the owner's 2026-11-03 shift two Xid
   alerts paged on faults that were already contained and ticketed; the previous
   on-call's handoff covered them and the team's Slack Claude app called them
   known. Limits: a follow-up runs only when the node alerts again, and `file`

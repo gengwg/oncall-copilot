@@ -609,6 +609,16 @@ check "near-miss alertname -> model's page stands" "Verdict: page - GPU 3 fell o
 xid_case "$(node_line c1)" "${DC[@]}" DC_DRAFT_DIR=
 check "contained Xid, no draft dir -> model's page stands" "Verdict: page - GPU 3 fell off the bus" "$OUT"
 case "$OUT" in *"DC draft:"*) bad "contained Xid, no draft dir -> no DC draft line" "$OUT" ;; *) ok "contained Xid, no draft dir -> no DC draft line" ;; esac
+# A draft dir that cannot be written leaves no draft, so the hold must not stand.
+mkdir -p "$TMP/dc-ro" && chmod 555 "$TMP/dc-ro"
+if ( : > "$TMP/dc-ro/probe" ) 2>/dev/null; then
+  command rm -f "$TMP/dc-ro/probe"
+  ok "contained Xid, unwritable draft dir -> skipped (this user can write into mode 555)"
+else
+  xid_case "$(node_line c1)" "${DC[@]}" DC_DRAFT_DIR="$TMP/dc-ro"
+  check "contained Xid, unwritable draft dir -> model's page stands" "Verdict: page - GPU 3 fell off the bus" "$OUT"
+fi
+chmod 755 "$TMP/dc-ro"
 xid_case "$(node_line c1)" "${DC[@]}"
 check "draft shows the hold verdict" "Copilot verdict: hold - contained known Xid (node cordoned)" "$draft"
 rm -f "$TMP/last_prompt.hwpage"
