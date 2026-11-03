@@ -55,18 +55,25 @@ the operator's admin kubeconfigs, in a sandboxed unit (`ProtectHome`,
   services, so a quiet heartbeat channel no longer means problems go unseen.
 - **A contained known Xid holds, and the DC flow follows up.** A `GPU Xid
   Critical` alert on a mapped cluster whose node is cordoned or carries the
-  gpu-fault taint gets a hold verdict and always gets a DC draft, whatever the
-  model said. Contained means cordoned or tainted, not necessarily drained (the
-  model prompt still says drained; the override uses cordoned alone, by the
-  owner's decision). If the node already has a ticket thread in the provider
-  channel, the agent drafts a follow-up there when the thread has been quiet for
-  24 hours, and says "already sent" when it has not. Why: on the owner's
-  2026-11-03 shift two Xid alerts paged on faults that were already contained
-  and ticketed; the previous on-call's handoff covered them and the team's Slack
-  Claude app called them known. Limits: a follow-up runs only when the node
-  alerts again, follow-ups and already-active results settle a node for 7 days, new requests for 14 (the ledger windows);
-  `file` on a brief forces a run. Slack allows one attached draft per channel, so
-  an unsent draft in a provider channel makes the next request or follow-up there
+  gpu-fault taint gets the hold verdict "hold - contained known Xid (<reasons>)",
+  naming which of the two applied, and the poller always writes its local DC
+  draft file, whatever the model said. The hold applies only once that file is
+  written; an uncontained node, an unmapped cluster or missing node evidence
+  keeps the model's verdict. Contained means cordoned or tainted, not
+  necessarily drained: the model prompt still says drained, and the owner chose
+  the cordon-alone scope explicitly (2026-11-03). The Slack agent then looks for
+  the node's ticket thread in the provider channel. If one exists, it drafts a
+  follow-up reply there when the thread has been quiet for 24 hours, and
+  reports "already exists" when it has not; with no thread it drafts a new
+  request. These Slack drafts are separate from the poller's file, and the owner
+  sends every one; the agent never does. A drafted request or follow-up settles
+  the node in the agent's ledger: follow-ups and already-active results for 7
+  days, new requests for 14. Why: on the owner's 2026-11-03 shift two Xid
+  alerts paged on faults that were already contained and ticketed; the previous
+  on-call's handoff covered them and the team's Slack Claude app called them
+  known. Limits: a follow-up runs only when the node alerts again, and `file`
+  on a brief forces a run. Slack allows one attached draft per channel, so an
+  unsent draft in a provider channel makes the next request or follow-up there
   fail until it is sent.
 - **Acks are narrow, and dry run first.** Only healthy briefs with a hold
   verdict, for paging-severity alerts that fired during the owner's own shift.
