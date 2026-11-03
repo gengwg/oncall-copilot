@@ -7,10 +7,13 @@ set -uo pipefail
 
 cd "$(dirname "$0")/.." || exit
 TMP=$(mktemp -d)
-free_port() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()'; }
-BEARER_PORT=$(free_port)
-BARE_PORT=$(free_port)
-BAREURL_PORT=$(free_port)
+# All three in one call with every socket held open, so the ports are distinct:
+# separate calls can hand back the same just-freed port, and a stub that then
+# can't bind leaves its mode served by another stub.
+read -r BEARER_PORT BARE_PORT BAREURL_PORT < <(python3 -c 'import socket
+s=[socket.socket() for _ in range(3)]
+for x in s: x.bind(("127.0.0.1",0))
+print(*[x.getsockname()[1] for x in s])')
 GLSA=glsa_test-token
 PLAIN=plain-test-token
 
