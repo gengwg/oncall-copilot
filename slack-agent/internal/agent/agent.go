@@ -520,6 +520,9 @@ func (a *Agent) runDC(ctx context.Context, j dcJob) error {
 	case dcrequest.Drafted:
 		status = "drafted"
 		msg = fmt.Sprintf("DC request drafted for %s/%s in %s. Review and send it from your Slack drafts. Reply `ignore` if it should not go.", ev.Cluster, ev.Node, orDash(res.Detail))
+	case dcrequest.FollowupDrafted:
+		status = "followup_drafted"
+		msg = fmt.Sprintf("Follow-up drafted in the existing thread for %s/%s: %s. Review and send it from your Slack drafts.", ev.Cluster, ev.Node, orDash(res.Detail))
 	case dcrequest.AlreadySent:
 		status = "already_sent"
 		msg = fmt.Sprintf("DC request for %s/%s already exists: %s. Nothing drafted.", ev.Cluster, ev.Node, orDash(res.Detail))

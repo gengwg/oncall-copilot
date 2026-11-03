@@ -21,9 +21,12 @@ import (
 type Status string
 
 const (
-	Drafted     Status = "drafted"
-	AlreadySent Status = "already_sent"
-	Failed      Status = "failed"
+	Drafted Status = "drafted"
+	// FollowupDrafted: the node already had a quiet ticket thread; the draft
+	// is a reply in that thread, not a new request.
+	FollowupDrafted Status = "followup_drafted"
+	AlreadySent     Status = "already_sent"
+	Failed          Status = "failed"
 )
 
 type Result struct {
@@ -93,13 +96,16 @@ func BuildPrompt(ev event.Event) string {
 	return fmt.Sprintf(`Run /file-dc-request for %s (cluster %s, node %s, alert %s) in draft-only mode.
 Rules for this unattended run:
 - Do not cordon, label, taint or drain anything, and do not change any system. If the skill says to cordon, write that the human must decide on the cordon in the request text instead.
-- First look in the provider's Slack channel for this cluster for a request or ticket about node %s in the last 14 days. If one exists, output exactly one line "RESULT: ALREADY_SENT <link or ticket>" and stop.
-- Otherwise gather the evidence the skill asks for, write the request in the skill's format, and create it as a Slack draft in the provider channel with slack_send_message_draft. Then output exactly one line "RESULT: DRAFTED <channel name>".
+- First look in the provider's Slack channel for this cluster for a request or ticket thread about node %s in the last 60 days. One thread covers a node for its whole life, so an old thread counts.
+- If a thread exists and the newest message in the thread is within the last 24 hours, output exactly one line "RESULT: ALREADY_SENT <link or ticket>" and stop. Do not draft anything.
+- If a thread exists and its newest message is older than 24 hours, gather fresh evidence as the skill asks and write one follow-up reply in that thread, then create it with slack_send_message_draft using the provider channel id and thread_ts set to the thread's parent message ts. Then output exactly one line "RESULT: FOLLOWUP_DRAFTED <thread link>". If the draft fails (for example attached_draft_exists, or the channel is not available), output "RESULT: FAILED <reason>" instead.
+- The follow-up is one short message addressed to the provider contact already in the thread. It gives the ticket id, the node's serial if known, hostname and IP if known, what changed since the last message (new evidence, such as the Xid still latched, remapped rows rising, a reboot that did not hold, and how long since the last update), one concrete ask (a date, an RMA, a reopen, or a specific check), and the node state ("cordoned with no customer workloads, so it can be taken any time" when true). It ends "Thank you." Example: "Hi Michael, checking in on 12103 for <serial> / <node> (<IP>). It has been a week since the reopen. Is there a date for the GPU 0 replacement, or anything you need from us? The node is still NotReady and cordoned with no customer workloads, so the swap can happen any time. Thank you."
+- If there is no thread, gather the evidence the skill asks for, write the request in the skill's format, and create it as a Slack draft in the provider channel with slack_send_message_draft. Then output exactly one line "RESULT: DRAFTED <channel name>".
 - If you cannot finish for any reason, output exactly one line "RESULT: FAILED <short reason>".
 The RESULT line must be the last line of your reply.`, link, ev.Cluster, ev.Node, ev.Alertname, ev.Node)
 }
 
-var resultLine = regexp.MustCompile(`(?m)^\s*RESULT:\s*(DRAFTED|ALREADY_SENT|FAILED)\b[ :-]*(.*)$`)
+var resultLine = regexp.MustCompile(`(?m)^\s*RESULT:\s*(DRAFTED|FOLLOWUP_DRAFTED|ALREADY_SENT|FAILED)\b[ :-]*(.*)$`)
 
 // ParseResult reads claude's JSON output and finds the RESULT line. No RESULT
 // line is a failure with the tail of the reply as the reason.
@@ -128,7 +134,7 @@ func parseResultText(text string) Result {
 		return Result{Status: Failed, Detail: "no RESULT line: " + tail}
 	}
 	last := m[len(m)-1]
-	st := map[string]Status{"DRAFTED": Drafted, "ALREADY_SENT": AlreadySent, "FAILED": Failed}[last[1]]
+	st := map[string]Status{"DRAFTED": Drafted, "FOLLOWUP_DRAFTED": FollowupDrafted, "ALREADY_SENT": AlreadySent, "FAILED": Failed}[last[1]]
 	return Result{Status: st, Detail: strings.TrimSpace(last[2])}
 }
 

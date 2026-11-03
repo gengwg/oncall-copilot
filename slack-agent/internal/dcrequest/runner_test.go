@@ -16,6 +16,7 @@ func TestParseResult(t *testing.T) {
 	}{
 		{"drafted from json", `{"result":"evidence...\nRESULT: DRAFTED #ext-cirrascale\n","is_error":false,"total_cost_usd":12.5}`, Drafted, "#ext-cirrascale"},
 		{"already sent", `{"result":"RESULT: ALREADY_SENT https://slack/p1"}`, AlreadySent, "https://slack/p1"},
+		{"followup drafted", `{"result":"RESULT: FOLLOWUP_DRAFTED https://x/thread"}`, FollowupDrafted, "https://x/thread"},
 		{"failed with reason", `{"result":"RESULT: FAILED - ssh to node refused"}`, Failed, "ssh to node refused"},
 		{"last result line wins", `{"result":"RESULT: FAILED x\nretrying\nRESULT: DRAFTED chan"}`, Drafted, "chan"},
 		{"no result line", `{"result":"I could not find the channel."}`, Failed, "no RESULT line: I could not find the channel."},
@@ -38,6 +39,21 @@ func TestBuildPromptAndArgs(t *testing.T) {
 	for _, want := range []string{"/file-dc-request", "https://slack/p9", "cheerful-tetra", "gpu-7", "Do not cordon", "RESULT: ALREADY_SENT", "RESULT: DRAFTED", "RESULT: FAILED"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("prompt lacks %q", want)
+		}
+	}
+	for _, want := range []string{
+		"in the last 60 days",
+		"older than 24 hours",
+		"newest message in the thread",
+		"thread_ts",
+		"slack_send_message_draft",
+		"RESULT: FOLLOWUP_DRAFTED <thread link>",
+		"attached_draft_exists",
+		"ticket id",
+		"Thank you.",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("prompt lacks follow-up rule %q", want)
 		}
 	}
 	args := strings.Join(Args(p, ""), " ")

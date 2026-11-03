@@ -384,6 +384,26 @@ func TestDCFailureAndAlreadySent(t *testing.T) {
 	}
 }
 
+func TestDCFollowupDrafted(t *testing.T) {
+	h := newHarness(t, myShift)
+	h.runner.res = dcrequest.Result{Status: dcrequest.FollowupDrafted, Detail: "https://slack/thread-1"}
+	first := withDraft(ev("G1", 1, "critical", now))
+	h.put(first)
+	h.tick()
+	want := fmt.Sprintf("Follow-up drafted in the existing thread for %s/%s: https://slack/thread-1. Review and send it from your Slack drafts.", first.Cluster, first.Node)
+	if r := h.rec("G1"); r.DCStatus != "followup_drafted" || !strings.HasSuffix(h.poster.lastReply(), ": "+want) {
+		t.Fatalf("rec=%+v reply=%q", r, h.poster.lastReply())
+	}
+	// It settles the node like a draft: the next alert does not stack another.
+	e2 := withDraft(ev("G2", 2, "critical", now))
+	e2.Node, e2.Cluster = first.Node, first.Cluster
+	h.put(e2)
+	h.tick()
+	if len(h.runner.calls) != 1 || h.rec("G2").DCStatus != "skipped_recent" {
+		t.Fatalf("calls=%v rec=%+v", h.runner.calls, h.rec("G2"))
+	}
+}
+
 func TestIgnoreReplySettlesTheNode(t *testing.T) {
 	h := newHarness(t, myShift)
 	h.put(withDraft(ev("G1", 1, "critical", now)))
