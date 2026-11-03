@@ -70,7 +70,8 @@ case "$*" in
   *" get node "*) [ "${STUB_NODE_HEALTHY:-0}" = "1" ] && {
       echo '{"spec":{},"status":{"conditions":[{"type":"Ready","status":"True","reason":"KubeletReady"},{"type":"MemoryPressure","status":"False"},{"type":"CheckFsPassed","status":"True","message":"filesystem check OK"},{"type":"XidCritical","status":"False","lastTransitionTime":"2026-10-25T03:20:00Z"}]}}'
       exit 0; }
-    cat <<'JSON'
+    # STUB_NODE_JQ reshapes the default (cordoned) node for the contained-or-not cases.
+    cat <<'JSON' | jq -c "${STUB_NODE_JQ:-.}"
 {"spec":{"unschedulable":true,"taints":[{"key":"node.kubernetes.io/unschedulable","effect":"NoSchedule"}]},
  "status":{"conditions":[
   {"type":"Ready","status":"True","reason":"KubeletReady"},
@@ -507,8 +508,8 @@ check "one model failure -> retried brief is complete" "Likely cause: Injected u
 printf 'c1\tsite-one\t#ext-site-one\tC0TEST1\tticket opens from a :ticket: reaction\n' > "$TMP/dc-providers.tsv"
 mkdir -p "$TMP/dc"
 DC=(PATH="$TMP/bin:$PATH" KUBECONFIG_DIR="$TMP/kc" DC_DRAFT_DIR="$TMP/dc" DC_PROVIDERS="$TMP/dc-providers.tsv")
-node_line() { # node_line <cluster>: the line the poller builds for a real node alert
-  jq -nc --arg c "$1" '{status:"firing", alertname:"GPU Xid Critical", severity:"warning",
+node_line() { # node_line <cluster> [alertname]: the line the poller builds for a real node alert
+  jq -nc --arg c "$1" --arg n "${2:-GPU Xid Critical}" '{status:"firing", alertname:$n, severity:"warning",
     summary:"Critical GPU Xid on gpu-node-7", description:"node-problem-detector latched XidCritical",
     labels:{cluster:$c, node:"gpu-node-7", condition:"XidCritical"}, starts_at:"2026-10-25T09:04:00Z",
     pager:"irm", label:"IRM", ref:"5157", url:"https://slack.example/archives/C1/p123"}'
@@ -537,7 +538,7 @@ if ls "$TMP"/dc/*.md >/dev/null 2>&1; then ok "real fault held -> still drafted"
 # A false alarm, or a cluster with no DC provider, gets no draft.
 command rm -f "$TMP"/dc/*.md
 touch "$TMP/last_prompt.hwfalse"
-run_investigate_line "$(node_line c1)" "${DC[@]}"
+run_investigate_line "$(node_line c1 'IB Rail Down')" "${DC[@]}"
 rm -f "$TMP/last_prompt.hwfalse"
 touch "$TMP/last_prompt.hwpage"
 run_investigate_line "$(node_line c2)" "${DC[@]}"
@@ -547,6 +548,50 @@ if ls "$TMP"/dc/*.md >/dev/null 2>&1; then
 else
   ok "false alarm or no provider -> no draft"
 fi
+
+# 20. A known Xid on a node that is already contained (cordoned, or carrying the
+#     gpu-fault taint) is held and always handed to the DC flow, which decides
+#     whether to file. Uncontained, unmapped or unreadable cases keep the model's
+#     verdict.
+HOLD_TAIL=": the DC request flow files a request or follows up on the existing ticket"
+touch "$TMP/last_prompt.hwpage"
+xid_case() { # xid_case <line> [env assignments...]: one run with a clean draft dir
+  command rm -f "$TMP"/dc/*.md
+  run_investigate_line "$@"
+  draft=$(cat "$TMP"/dc/*.md 2>/dev/null)
+}
+xid_case "$(node_line c1 'GPU Xid Critical (node-problem-detector)')" "${DC[@]}"
+check "contained Xid -> model page becomes hold" "Verdict: hold - contained known Xid (node cordoned)$HOLD_TAIL" "$OUT"
+check "contained Xid -> draft written" "Hardware request — site-one, gpu-node-7:" "$draft"
+check "contained Xid -> model's fault call untouched" "Fault: real - Xid 79 condition is active" "$OUT"
+
+xid_case "$(node_line c1)" "${DC[@]}" 'STUB_NODE_JQ=.spec={"taints":[{"key":"aranya.tech/gpu-fault","value":"xid79","effect":"NoSchedule"}]}'
+check "gpu-fault taint, not cordoned -> hold" "Verdict: hold - contained known Xid (gpu-fault taint)$HOLD_TAIL" "$OUT"
+check "gpu-fault taint, not cordoned -> draft written" "Hardware request" "$draft"
+
+xid_case "$(node_line c1)" "${DC[@]}" 'STUB_NODE_JQ=.spec={"unschedulable":true,"taints":[{"key":"aranya.tech/gpu-fault","effect":"NoSchedule"}]}'
+check "cordoned and tainted -> both reasons" "Verdict: hold - contained known Xid (node cordoned, gpu-fault taint)$HOLD_TAIL" "$OUT"
+
+xid_case "$(node_line c1)" "${DC[@]}" 'STUB_NODE_JQ=.spec={"taints":[{"key":"other/taint","effect":"NoSchedule"}]}'
+check "uncontained Xid -> model's page stands" "Verdict: page - GPU 3 fell off the bus" "$OUT"
+check "uncontained Xid -> drafted by the usual rule" "Hardware request" "$draft"
+
+xid_case "$(node_line c1)" "${DC[@]}" KUBECONFIG_DIR="$TMP/nokc"
+check "no node evidence -> not contained, model's page stands" "Verdict: page - GPU 3 fell off the bus" "$OUT"
+
+rm -f "$TMP/last_prompt.hwpage"; touch "$TMP/last_prompt.hwfalse"
+xid_case "$(node_line c1)" "${DC[@]}"
+check "contained Xid, model says false alarm -> held" "Verdict: hold - contained known Xid (node cordoned)$HOLD_TAIL" "$OUT"
+check "contained Xid, model says false alarm -> still drafted" "Hardware request" "$draft"
+rm -f "$TMP/last_prompt.hwfalse"; touch "$TMP/last_prompt.hwpage"
+
+xid_case "$(node_line c2)" "${DC[@]}"
+check "unmapped cluster -> model's page stands" "Verdict: page - GPU 3 fell off the bus" "$OUT"
+[ -z "$draft" ] && ok "unmapped cluster -> no draft" || bad "unmapped cluster -> no draft" "$draft"
+
+xid_case "$(node_line c1 'IB Rail Down')" "${DC[@]}"
+check "contained non-Xid alert -> model's page stands" "Verdict: page - GPU 3 fell off the bus" "$OUT"
+rm -f "$TMP/last_prompt.hwpage"
 
 echo
 echo "passed: $PASS  failed: $FAIL"

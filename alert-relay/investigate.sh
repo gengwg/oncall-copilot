@@ -367,39 +367,57 @@ case "$fault" in
   *) fault="real - no fault call given, treating as real" ;;
 esac
 
+# Owner's rule: a known GPU Xid on a node that is already contained (cordoned,
+# or carrying the gpu-fault taint) never pages. The DC request flow decides
+# whether to file or follow up, so it always gets the draft, whatever the model
+# said about FAULT. No node evidence, an unmapped cluster or any other alert
+# keeps the model's verdict.
+prov=""
+[ -r "$DC_PROVIDERS" ] && [ -n "$node" ] && prov=$(awk -F'\t' -v c="$cluster" '$1 == c' "$DC_PROVIDERS" | head -1)
+contained_xid=""
+case "$alertname" in "GPU Xid Critical"*)
+  if [ -n "$prov" ]; then
+    reasons=""
+    printf '%s\n' "$node_info" | grep -qx 'cordoned: true' && reasons="node cordoned"
+    printf '%s\n' "$node_info" | grep -E '^taints: ' | grep -qE '(: |, )aranya\.tech/gpu-fault:' && reasons="${reasons:+$reasons, }gpu-fault taint"
+    if [ -n "$reasons" ]; then
+      contained_xid=1
+      verdict="hold - contained known Xid ($reasons): the DC request flow files a request or follows up on the existing ticket"
+    fi
+  fi ;;
+esac
+
 # A real hardware or fabric fault on a node is a request to the DC provider.
 # Draft it in the house format from what this read-only run can see; SSH
 # evidence, the node's IP and provider ID, and the cordon call stay with the
 # human finishing it, so the draft says what is missing. Nothing is sent.
 dc_draft=""
-if [ -n "$DC_DRAFT_DIR" ] && [ -r "$DC_PROVIDERS" ] && [ -n "$node" ] && [ "${fault%% *}" = real ]; then
-  case "$fm" in hardware|fabric)
-    prov=$(awk -F'\t' -v c="$cluster" '$1 == c' "$DC_PROVIDERS" | head -1)
-    if [ -n "$prov" ]; then
-      IFS=$'\t' read -r _ site chan chan_id ticket_note <<< "$prov"
-      url=$(printf '%s' "$alert_json" | jq -r '.url // ""')
-      ref=$(printf '%s' "$alert_json" | jq -r '(.label // "") + "|" + (.ref // "")')
-      label=${ref%%|*}; ref=${ref#*|}
-      # Both end up in a filename.
-      label=$(printf '%s' "$label" | tr -cd 'A-Za-z0-9._-'); ref=$(printf '%s' "$ref" | tr -cd 'A-Za-z0-9._-')
-      mkdir -p "$DC_DRAFT_DIR"
-      dc_draft="$DC_DRAFT_DIR/$date-${ref:+$label$ref-}$node.md"
-      {
-        printf 'Hardware request — %s, %s: %s (cluster %s)\n\n' "$site" "$node" "$alertname" "$cluster"
-        printf 'Node:    %s — TODO: IP and provider ID from the inventory\n' "$node"
-        printf 'Serial:  TODO: sudo dmidecode -s system-serial-number on the node\n\n'
-        printf 'Symptom: %s since %s UTC. %s\n' "$alertname" "${starts_at:-unknown}" "$(printf '%s' "$rootcause" | clip 400)"
-        printf 'Node state read %s:\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-        printf '%s\n' "$node_info" | sed 's/^/  /'
-        printf '\nRequest: TODO: the specific action (check counters / reseat / replace / open an RMA). Copilot verdict: %s\n' "$verdict"
-        printf 'Say whether the node stays in service. Physical work is the provider'"'"'s; drain belongs to whoever manages the cluster.\n\n'
-        printf 'Please open a ticket for this and share the case number.\n\n'
-        printf -- '---\nPost to: %s (%s) — %s\n' "$chan" "$chan_id" "$ticket_note"
-        printf 'Draft only, nothing was sent. Finish with: /file-dc-request %s\n' "${url:-<alert link>}"
-        printf '(adds SSH evidence, the IP and provider ID, and the cordon decision, then drafts it in Slack)\n'
-      } > "$dc_draft"
-    fi ;;
-  esac
+want_draft=""
+[ "${fault%% *}" = real ] && case "$fm" in hardware|fabric) want_draft=1 ;; esac
+[ -n "$contained_xid" ] && want_draft=1
+if [ -n "$DC_DRAFT_DIR" ] && [ -n "$prov" ] && [ -n "$want_draft" ]; then
+  IFS=$'\t' read -r _ site chan chan_id ticket_note <<< "$prov"
+  url=$(printf '%s' "$alert_json" | jq -r '.url // ""')
+  ref=$(printf '%s' "$alert_json" | jq -r '(.label // "") + "|" + (.ref // "")')
+  label=${ref%%|*}; ref=${ref#*|}
+  # Both end up in a filename.
+  label=$(printf '%s' "$label" | tr -cd 'A-Za-z0-9._-'); ref=$(printf '%s' "$ref" | tr -cd 'A-Za-z0-9._-')
+  mkdir -p "$DC_DRAFT_DIR"
+  dc_draft="$DC_DRAFT_DIR/$date-${ref:+$label$ref-}$node.md"
+  {
+    printf 'Hardware request — %s, %s: %s (cluster %s)\n\n' "$site" "$node" "$alertname" "$cluster"
+    printf 'Node:    %s — TODO: IP and provider ID from the inventory\n' "$node"
+    printf 'Serial:  TODO: sudo dmidecode -s system-serial-number on the node\n\n'
+    printf 'Symptom: %s since %s UTC. %s\n' "$alertname" "${starts_at:-unknown}" "$(printf '%s' "$rootcause" | clip 400)"
+    printf 'Node state read %s:\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf '%s\n' "$node_info" | sed 's/^/  /'
+    printf '\nRequest: TODO: the specific action (check counters / reseat / replace / open an RMA). Copilot verdict: %s\n' "$verdict"
+    printf 'Say whether the node stays in service. Physical work is the provider'"'"'s; drain belongs to whoever manages the cluster.\n\n'
+    printf 'Please open a ticket for this and share the case number.\n\n'
+    printf -- '---\nPost to: %s (%s) — %s\n' "$chan" "$chan_id" "$ticket_note"
+    printf 'Draft only, nothing was sent. Finish with: /file-dc-request %s\n' "${url:-<alert link>}"
+    printf '(adds SSH evidence, the IP and provider ID, and the cordon decision, then drafts it in Slack)\n'
+  } > "$dc_draft"
 fi
 
 # Latest report for a different alert with the same failure mode: the same
