@@ -1,8 +1,10 @@
 package dcrequest
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gengwg/oncall-copilot/slack-agent/internal/event"
 )
@@ -35,19 +37,27 @@ func TestParseResult(t *testing.T) {
 
 func TestBuildPromptAndArgs(t *testing.T) {
 	ev := event.Event{URL: "https://slack/p9", Cluster: "cheerful-tetra", Node: "gpu-7", Alertname: "GPU Xid Critical"}
-	p := BuildPrompt(ev)
+	at := time.Date(2026, 11, 3, 16, 0, 0, 0, time.UTC)
+	p := BuildPrompt(ev, at)
 	for _, want := range []string{"/file-dc-request", "https://slack/p9", "cheerful-tetra", "gpu-7", "Do not cordon", "RESULT: ALREADY_SENT", "RESULT: DRAFTED", "RESULT: FAILED"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("prompt lacks %q", want)
 		}
 	}
 	for _, want := range []string{
-		"in the last 60 days",
-		"older than 24 hours",
-		"newest message in the thread",
+		"going back 60 days",
+		"PARENT message",
+		"exactly node gpu-7",
+		"not a prefix",
+		"appears only in replies does not count",
+		"affected nodes",
+		"use the newest",
+		"Current time: 2026-11-03T16:00:00Z",
+		"permalink of the thread's parent",
+		"Hi <contact>, checking in on <ticket>",
 		"thread_ts",
 		"slack_send_message_draft",
-		"RESULT: FOLLOWUP_DRAFTED <thread link>",
+		"RESULT: FOLLOWUP_DRAFTED <link>",
 		"attached_draft_exists",
 		"ticket id",
 		"Thank you.",
@@ -55,6 +65,10 @@ func TestBuildPromptAndArgs(t *testing.T) {
 		if !strings.Contains(p, want) {
 			t.Errorf("prompt lacks follow-up rule %q", want)
 		}
+	}
+	cutoff := fmt.Sprint(at.Add(-24 * time.Hour).Unix())
+	if n := strings.Count(p, cutoff); n != 3 || !strings.Contains(p, "below "+cutoff+", which is 24 hours ago") {
+		t.Errorf("cutoff %s must appear 3 times and be the 24 h mark, got %d in:\n%s", cutoff, n, p)
 	}
 	args := strings.Join(Args(p, ""), " ")
 	if strings.Contains(args, "--model") {

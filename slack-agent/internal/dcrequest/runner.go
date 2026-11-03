@@ -88,7 +88,9 @@ func Args(prompt, model string) []string {
 	return a
 }
 
-func BuildPrompt(ev event.Event) string {
+// BuildPrompt states the clock itself: the headless model gets a date, not a
+// time, so the 24 h quiet cutoff is computed here.
+func BuildPrompt(ev event.Event, now time.Time) string {
 	link := ev.URL
 	if link == "" {
 		link = pager.Label(ev.Pager) + " alert group #" + ev.Ref
@@ -96,13 +98,14 @@ func BuildPrompt(ev event.Event) string {
 	return fmt.Sprintf(`Run /file-dc-request for %s (cluster %s, node %s, alert %s) in draft-only mode.
 Rules for this unattended run:
 - Do not cordon, label, taint or drain anything, and do not change any system. If the skill says to cordon, write that the human must decide on the cordon in the request text instead.
-- First look in the provider's Slack channel for this cluster for a request or ticket thread about node %s in the last 60 days. One thread covers a node for its whole life, so an old thread counts.
-- If a thread exists and the newest message in the thread is within the last 24 hours, output exactly one line "RESULT: ALREADY_SENT <link or ticket>" and stop. Do not draft anything.
-- If a thread exists and its newest message is older than 24 hours, gather fresh evidence as the skill asks and write one follow-up reply in that thread, then create it with slack_send_message_draft using the provider channel id and thread_ts set to the thread's parent message ts. Then output exactly one line "RESULT: FOLLOWUP_DRAFTED <thread link>". If the draft fails (for example attached_draft_exists, or the channel is not available), output "RESULT: FAILED <reason>" instead.
-- The follow-up is one short message addressed to the provider contact already in the thread. It gives the ticket id, the node's serial if known, hostname and IP if known, what changed since the last message (new evidence, such as the Xid still latched, remapped rows rising, a reboot that did not hold, and how long since the last update), one concrete ask (a date, an RMA, a reopen, or a specific check), and the node state ("cordoned with no customer workloads, so it can be taken any time" when true). It ends "Thank you." Example: "Hi Michael, checking in on 12103 for <serial> / <node> (<IP>). It has been a week since the reopen. Is there a date for the GPU 0 replacement, or anything you need from us? The node is still NotReady and cordoned with no customer workloads, so the swap can happen any time. Thank you."
+- First look in the provider's Slack channel for this cluster for the ticket thread for node %s, going back 60 days. One thread covers a node for its whole life, so an old thread counts. The thread is the one whose PARENT message is the request or ticket for exactly node %[5]s: the whole hostname must match, not a prefix (gpu-9 is not gpu-90). A thread where the node appears only in replies does not count. The one exception is a shared-component thread whose parent lists the node among its affected nodes. If several threads qualify, use the newest.
+- Current time: %[6]s. A thread is quiet only if its newest message ts (Slack ts, epoch seconds) is below %[7]d, which is 24 hours ago. Compare against that number; do not estimate the time yourself.
+- If a thread exists and its newest message ts is %[7]d or later, output exactly one line "RESULT: ALREADY_SENT <link or ticket>" and stop. Do not draft anything.
+- If a thread exists and its newest message ts is below %[7]d, gather fresh evidence as the skill asks, compose one follow-up and save it only as a draft reply with slack_send_message_draft (channel_id, thread_ts = the thread parent's ts). Then output exactly one line "RESULT: FOLLOWUP_DRAFTED <link>", where <link> is the permalink of the thread's parent message (the draft call returns a channel link, not the thread). If the draft fails (for example attached_draft_exists, or the channel is not available), output "RESULT: FAILED <reason>" instead.
+- The follow-up is one short message addressed to the provider contact already in the thread. It gives the ticket id, the node's serial if known, hostname and IP if known, what changed since the last message (new evidence, such as the Xid still latched, remapped rows rising, a reboot that did not hold, and how long since the last update), one concrete ask (a date, an RMA, a reopen, or a specific check), and the node state ("cordoned with no customer workloads, so it can be taken any time" when true). It ends "Thank you." Example: "Hi <contact>, checking in on <ticket> for <serial> / <node> (<IP>). It has been a week since the reopen. Is there a date for the GPU 0 replacement, or anything you need from us? The node is still NotReady and cordoned with no customer workloads, so the swap can happen any time. Thank you."
 - If there is no thread, gather the evidence the skill asks for, write the request in the skill's format, and create it as a Slack draft in the provider channel with slack_send_message_draft. Then output exactly one line "RESULT: DRAFTED <channel name>".
 - If you cannot finish for any reason, output exactly one line "RESULT: FAILED <short reason>".
-The RESULT line must be the last line of your reply.`, link, ev.Cluster, ev.Node, ev.Alertname, ev.Node)
+The RESULT line must be the last line of your reply.`, link, ev.Cluster, ev.Node, ev.Alertname, ev.Node, now.UTC().Format(time.RFC3339), now.Add(-24*time.Hour).Unix())
 }
 
 var resultLine = regexp.MustCompile(`(?m)^\s*RESULT:\s*(DRAFTED|FOLLOWUP_DRAFTED|ALREADY_SENT|FAILED)\b[ :-]*(.*)$`)
@@ -145,7 +148,7 @@ func (r ExecRunner) FileDCRequest(ctx context.Context, ev event.Event) (Result, 
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, r.Bin, Args(BuildPrompt(ev), r.Model)...)
+	cmd := exec.CommandContext(ctx, r.Bin, Args(BuildPrompt(ev, time.Now()), r.Model)...)
 	cmd.Dir = r.Dir
 	cmd.Stdin = nil // claude waits on a tty-less stdin otherwise
 	var stdout, stderr bytes.Buffer
