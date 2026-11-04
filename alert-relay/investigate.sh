@@ -382,7 +382,16 @@ degraded=""
 case "$analysis" in ""|"analysis unavailable") degraded="model call failed" ;; esac
 [ -n "$node_note" ] && degraded="${degraded:+$degraded; }node evidence $node_note"
 fm=$(printf '%s' "$analysis" | sed -n 's/^FAILURE MODE: *//p' | tail -1 | awk '{print tolower($1)}')
-case "$fm" in change|capacity|dependency|network|hardware|fabric|control-plane) ;; *) fm=other ;; esac
+# A reply that leaves the failure mode out (or only echoes the template) on a
+# GPU or NVLink alert is a hardware fault: read as "other" it gets no DC draft.
+# An explicit "other" stands, and a failed model call is not a reply.
+case "$fm" in
+  change|capacity|dependency|network|hardware|fabric|control-plane|other) ;;
+  *) fm=other
+     case "$analysis" in ""|"analysis unavailable") ;; *)
+       case "$alertname" in "GPU "*|*NVLink*) fm=hardware ;; esac ;;
+     esac ;;
+esac
 # Shadow-mode verdict, logged for comparison with what on-call actually did.
 # Anything but an explicit hold reads as page: a wrong page costs sleep, a
 # wrong hold costs an outage.

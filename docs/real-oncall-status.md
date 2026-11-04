@@ -43,7 +43,10 @@ the operator's admin kubeconfigs, in a sandboxed unit (`ProtectHome`,
 - **Verdict and fault are separate calls.** `page|hold` is urgency, `real|false-alarm`
   is whether to file. A dead GPU on a drained node holds but still gets a DC draft.
   A missing call reads as page and as real: a wrong page costs sleep, a missing
-  ticket costs more.
+  ticket costs more. For the same reason a reply without a failure mode on a
+  `GPU ...` or NVLink alert reads as hardware, so it still gets its draft; an
+  explicit `other` stands (2026-11-04, an NVLink reply that stopped after
+  ROOT CAUSE got no draft).
 - **Facts the model must not infer are computed in code.** Live replays showed
   the model trusts the alert's wording over a condition missing from the
   evidence, so the alert condition's state and timing are stated outright.
