@@ -68,7 +68,9 @@ every verdict. Nobody has scored them yet.
 
 - Preconditions: A2 passes, and one 08:00 PT handoff has been watched in dry
   run (`deploy/systemd/README.md`, Going live).
-- Set `ACK_DRY_RUN=0` and restart the agent.
+- Set `ACK_DRY_RUN=0` and restart the agent. Done 2026-11-04 18:53Z by the
+  owner's decision, after the 2026-11-03 shift and handoff in dry run and before
+  the A2 formal pass; A2 scores only briefs before that time.
 - Every real ack already gets an in-thread reply. Extend the A2 script to list
   each live ack next to what happened to that alert group afterwards.
 - Kill switch, written into the deploy README: `ACK_DRY_RUN=1` plus a restart,
