@@ -3,22 +3,61 @@
 # oldest first, in the shape documented in poll.sh. On a failed fetch it prints
 # one error line to stderr and exits non-zero.
 #
+# Usage: irm.sh               the newest 50 groups
+#        irm.sh page <n>      page n of 50 (1 is the newest), for the history
+#                             backfill; nothing once past the last page
+#        irm.sh outcome <id>  one group's outcome as a JSON object:
+#                             {id, ref, state, paged_at, acked_at, acked_by_person,
+#                              resolved_at, resolved_by_person}
 # Env: IRM_API_URL, GRAFANA_URL, GRAFANA_TOKEN (read-only service account).
 set -uo pipefail
 
 : "${IRM_API_URL:?set IRM_API_URL}" "${GRAFANA_URL:?set GRAFANA_URL}" "${GRAFANA_TOKEN:?set GRAFANA_TOKEN}"
 
+mode="${1:-}"
+case "$mode" in
+  "") url="${IRM_API_URL%/}/api/v1/alert_groups/?perpage=50" ;;
+  page)
+    page="${2:-}"
+    case "$page" in ""|*[!0-9]*) echo "error: page needs a number" >&2; exit 2 ;; esac
+    url="${IRM_API_URL%/}/api/v1/alert_groups/?perpage=50&page=$page" ;;
+  outcome)
+    # The id lands in the URL path.
+    gid=$(printf '%s' "${2:-}" | tr -cd 'A-Za-z0-9')
+    [ -n "$gid" ] || { echo "error: outcome needs an alert group id" >&2; exit 2; }
+    url="${IRM_API_URL%/}/api/v1/alert_groups/$gid" ;;
+  *) echo "error: unknown mode $mode" >&2; exit 2 ;;
+esac
+
 body=$(mktemp)
 trap 'rm -f "$body"' EXIT
-# Only the first page, newest first. At a 60s cadence more than 50 new groups
-# between polls means a storm, and storm repeats are skipped anyway.
+# Only the first page by default, newest first. At a 60s cadence more than 50
+# new groups between polls means a storm, and storm repeats are skipped anyway.
 code=$(curl -s -m 20 -o "$body" -w '%{http_code}' \
   -H "Authorization: Bearer $GRAFANA_TOKEN" -H "X-Grafana-URL: $GRAFANA_URL" \
-  "${IRM_API_URL%/}/api/v1/alert_groups/?perpage=50" 2>/dev/null) || true
+  "$url" 2>/dev/null) || true
 # A refused token must not read as "no new alerts".
 if [ "${code:-000}" != "200" ]; then
   echo "error: IRM alert_groups returned HTTP ${code:-000} from $IRM_API_URL" >&2
   exit 1
+fi
+
+if [ "$mode" = outcome ]; then
+  # Timestamps lose their fraction so jq's fromdateiso8601 can read them. A
+  # resolver of null means the alert itself cleared.
+  jq -c 'def ts: if . == null then "" else sub("\\.[0-9]+"; "") end;
+    {id, ref: (.alert_group_number | tostring), state,
+     paged_at: (.created_at | ts), acked_at: (.acknowledged_at | ts),
+     acked_by_person: (.acknowledged_by != null),
+     resolved_at: (.resolved_at | ts), resolved_by_person: (.resolved_by != null)}' "$body" 2>/dev/null \
+    || { echo "error: IRM alert_groups returned a body that is not an alert group" >&2; exit 1; }
+  exit 0
+fi
+
+# Past the last page IRM answers with the last page again.
+if [ "$mode" = page ] && [ "$(jq -r '.current_page_number // empty' "$body" 2>/dev/null)" != "$page" ] \
+   && [ "$page" != 1 ]; then
+  exit 0
 fi
 
 # The group's severity (for the filter) comes from the group payload; the

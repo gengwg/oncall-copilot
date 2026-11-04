@@ -51,8 +51,27 @@ class H(BaseHTTPRequestHandler):
             self.send_response(401); self.end_headers(); return
         if not self.path.startswith("/api/v1/alert_groups/"):
             self.send_response(404); self.end_headers(); return
-        with open(groups) as f:
-            body = {"count": 0, "next": None, "results": json.load(f)}
+        # Older pages come from <groups>.page<N>; past the last one IRM answers
+        # with the last page again (page 1 here). /alert_groups/<id> is one group.
+        import os, re
+        from urllib.parse import urlparse, parse_qs
+        u = urlparse(self.path)
+        gid = u.path[len("/api/v1/alert_groups/"):].strip("/")
+        page = int(parse_qs(u.query).get("page", ["1"])[0])
+        if gid:
+            pages = [groups] + sorted(p for p in (groups + ".page%d" % n for n in range(2, 10)) if os.path.exists(p))
+            for p in pages:
+                with open(p) as f:
+                    for g in json.load(f):
+                        if g.get("id") == gid:
+                            self.send_response(200); self.end_headers()
+                            self.wfile.write(json.dumps(g).encode()); return
+            self.send_response(404); self.end_headers(); return
+        src = groups + ".page%d" % page
+        if page < 2 or not os.path.exists(src):
+            src, page = groups, 1
+        with open(src) as f:
+            body = {"count": 0, "next": None, "current_page_number": page, "results": json.load(f)}
         self.send_response(200); self.end_headers()
         self.wfile.write(json.dumps(body).encode())
     def log_message(self, *a): pass
@@ -268,7 +287,7 @@ run_poll STATE_DIR="$SNAP" OUTBOX_DIR="$OB13"
 set_groups "$(group S1 501 firing SnapX c30 critical gpu-9)" "$(group S0 500 resolved SnapOld c30 warning)"
 : > "$TMP/investigated"
 run_poll STATE_DIR="$SNAP" OUTBOX_DIR="$OB13"
-want_line='{"status":"firing","alertname":"SnapX","severity":"critical","summary":"summary SnapX","description":"description SnapX","labels":{"alertname":"SnapX","cluster":"c30","node":"gpu-9","severity":"critical","condition":"GpuXidCritical"},"starts_at":"2026-10-25T09:04:00Z","pager":"irm","label":"IRM","ref":"501","url":"https://slack.example/archives/C1/p501","paged_at":"2026-10-25T09:04:00Z"}'
+want_line='{"status":"firing","alertname":"SnapX","severity":"critical","summary":"summary SnapX","description":"description SnapX","labels":{"alertname":"SnapX","cluster":"c30","node":"gpu-9","severity":"critical","condition":"GpuXidCritical"},"starts_at":"2026-10-25T09:04:00Z","pager":"irm","label":"IRM","ref":"501","url":"https://slack.example/archives/C1/p501","paged_at":"2026-10-25T09:04:00Z","past_pages":[],"past_pages_total":0}'
 got_line=$(tail -n 1 "$TMP/investigated" | jq -S . 2>&1)
 [ "$got_line" = "$(jq -S . <<< "$want_line")" ] && ok "snapshot -> investigated line" || bad "snapshot -> investigated line" "got: $got_line"
 want_ev='{"pager":"irm","id":"S1","ref":"501","url":"https://slack.example/archives/C1/p501","irm_id":"S1","irm_number":501,"irm_url":"https://slack.example/archives/C1/p501","alertname":"SnapX","severity":"critical","cluster":"c30","node":"gpu-9","starts_at":"2026-10-25T09:04:00Z","fault":"unknown","verdict":"unknown","failure_mode":"unknown","degraded":null,"dc_draft":null}'
@@ -505,6 +524,50 @@ bad_lines=$(printf '%s\n' "$all" | grep -vE "$HLINE" | grep -v '	old [0-9]*$' | 
 [ -z "$bad_lines" ] && ok "health: every line matches the format" || bad "health: every line matches the format" "$bad_lines"
 lacks "health: no line contains the heartbeat secret" "s3cret" "$all"
 lacks "health: no line contains a heartbeat path" "/heartbeat/" "$all"
+
+# 23. Past pages: the same alert on the same node before, with how it went,
+#     from the pager's own history. The first run backfills older pages, so
+#     pages from before this host's briefs count (2026-11-03: a disk brief said
+#     "Previous: none on file" although the same node had paged on 10-21 and
+#     cleared by itself in 30 minutes).
+at() { date -u -d "$1" +%Y-%m-%dT%H:%M:%S.123456Z; }
+hgroup() { # hgroup <id> <num> <state> <alertname> <node> <created> [acked +min] [resolved +min] [resolver]
+  group "$1" "$2" "$3" "$4" c40 critical "$5" | jq -c --arg c "$(at "$6")" \
+    --arg a "${7:+$(at "$6 +$7 min")}" --arg r "${8:+$(at "$6 +$8 min")}" --arg by "${9:-}" \
+    '.created_at = $c | .acknowledged_at = (if $a == "" then null else $a end)
+     | .acknowledged_by = (if $a == "" then null else "U1" end)
+     | .resolved_at = (if $r == "" then null else $r end) | .resolved_by = (if $by == "" then null else $by end)'
+}
+SH="$TMP/state-hist"
+set_groups "$(hgroup H4 604 acknowledged DiskFull gpu-5 '-1 day' 5)"
+printf '%s\n' "$(hgroup H3 603 resolved OtherAlert gpu-5 '-2 days' '' 10)" "$(hgroup H2 602 resolved DiskFull gpu-6 '-3 days' '' 10)" \
+  "$(hgroup H1 601 resolved DiskFull gpu-5 '-4 days' 9 60)" "$(hgroup H0 600 resolved DiskFull gpu-5 '-200 days' '' 30)" \
+  | jq -s . > "$TMP/groups.json.page2"
+run_poll STATE_DIR="$SH"
+check "history: first run backfills older pages" "history: 4 past alert groups" "$OUT"
+lacks "history: older than HISTORY_DAYS left out" $'\tH0\t' "$(cat "$SH/history.tsv")"
+set_groups "$(hgroup H5 605 new DiskFull gpu-5 '-1 min')" "$(hgroup H4 604 acknowledged DiskFull gpu-5 '-1 day' 5)"
+: > "$TMP/investigated"
+run_poll STATE_DIR="$SH"
+past=$(tail -1 "$TMP/investigated" | jq -c '[.past_pages[] | .ref]')
+[ "$past" = '["604","601"]' ] && ok "history: same alert and node, newest first" || bad "history: same alert and node, newest first" "got $past"
+check "history: total counted" '"past_pages_total":2' "$(tail -1 "$TMP/investigated")"
+o=$(tail -1 "$TMP/investigated" | jq -c '.past_pages[1] | {acked_by_person, resolved_by_person, state}')
+[ "$o" = '{"acked_by_person":true,"resolved_by_person":false,"state":"resolved"}' ] && ok "history: outcome read per group" || bad "history: outcome read per group" "got $o"
+lacks "history: timestamps without the fraction" ".123456" "$(tail -1 "$TMP/investigated" | jq -c .past_pages)"
+check "history: a group seen by the poll joins the history" $'\tH5\t' "$(cat "$SH/history.tsv")"
+# Off: no backfill, though groups the poll sees are still recorded.
+SH0="$TMP/state-hist0"
+set_groups "$(hgroup H4 604 acknowledged DiskFull gpu-5 '-1 day' 5)"
+run_poll STATE_DIR="$SH0" HISTORY_DAYS=0
+command rm -f "$TMP/groups.json.page2"
+h0=$(cat "$SH0/history.tsv" 2>&1)
+check "history: HISTORY_DAYS=0 -> the polled group recorded" $'\tH4\t' "$h0"
+lacks "history: HISTORY_DAYS=0 -> no older pages read" $'\tH1\t' "$h0"
+set_groups "$(hgroup H5 605 new DiskFull gpu-5 '-1 min')" "$(hgroup H4 604 acknowledged DiskFull gpu-5 '-1 day' 5)"
+: > "$TMP/investigated"
+run_poll STATE_DIR="$SH0" IRM_API_URL="http://127.0.0.1:1"
+[ "$RC" -ne 0 ] && ok "history: pager down -> poll fails as before" || bad "history: pager down -> poll fails as before" "rc=$RC"
 
 echo
 echo "$PASS passed, $FAIL failed"

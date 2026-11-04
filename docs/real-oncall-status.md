@@ -64,6 +64,14 @@ the operator's admin kubeconfigs, in a sandboxed unit (`ProtectHome`,
   briefs in a row (one upstream blip does not alert); once held, it stays held
   until a healthy brief. The 08:05 digest now carries a health line for both
   services, so a quiet heartbeat channel no longer means problems go unseen.
+- **Past pages come from the pager, not only from this host's briefs.** The
+  poller keeps every IRM alert group it lists in `history.tsv` (the first run
+  pages back up to 90 days; IRM itself keeps about 30) and hands each
+  investigation the newest three earlier pages of the same alert on the same
+  node with their outcome: acked by a person or not, resolved by a person or
+  cleared by itself, and after how long. Three extra GETs per brief. Why: on
+  2026-11-03 a disk brief said "Previous: none on file" although that node
+  had paged two weeks earlier and cleared by itself in 30 minutes.
 - **The owner's notes outrank the previous brief.** `note <what you found>` in
   a brief's thread keeps the finding for that cluster and node in
   `/var/lib/oncall-copilot/notes/<cluster>@<node>.tsv`. The newest five reach

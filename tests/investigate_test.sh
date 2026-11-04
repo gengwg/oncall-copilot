@@ -657,6 +657,27 @@ check "owner note -> in the report" "## Owner notes" "$(cat "$TMP/ws/memory/inci
 run_investigate_line "$(notes_line gpu-node-9)" PATH="$TMP/bin:$PATH" KUBECONFIG_DIR="$TMP/kc" NOTES_DIR="$TMP/notes"
 case "$(cat "$TMP/last_prompt")$OUT" in *"OWNER NOTES"*|*"Owner notes"*) bad "no notes -> no notes section" "got one" ;; *) ok "no notes -> no notes section" ;; esac
 
+# 18e. Past pages from the pager reach the prompt, the report and the brief, with
+#      how each went (2026-11-03: a disk brief had no idea the same node had
+#      paged before and cleared by itself).
+past_line=$(jq -nc '{status:"firing", alertname:"Node Disk Pressure", severity:"warning", summary:"s", description:"d",
+  labels:{cluster:"c1", node:"gpu-node-7"}, starts_at:"2026-10-25T09:04:00Z", pager:"irm", label:"IRM", ref:"6004", url:"",
+  past_pages:[
+    {id:"I2", ref:"5611", state:"resolved", paged_at:"2026-11-04T00:16:42Z", acked_at:"2026-11-04T00:20:15Z", acked_by_person:true, resolved_at:"2026-11-04T00:46:42Z", resolved_by_person:false},
+    {id:"I1", ref:"5595", state:"acknowledged", paged_at:"2026-11-03T22:16:42Z", acked_at:"", acked_by_person:false, resolved_at:"", resolved_by_person:false},
+    {id:"I0", ref:"4766", state:"unknown", paged_at:"2026-10-21T10:00:00Z"}],
+  past_pages_total:5}')
+run_investigate_line "$past_line" PATH="$TMP/bin:$PATH" KUBECONFIG_DIR="$TMP/kc"
+prompt=$(cat "$TMP/last_prompt")
+check "past pages -> section with the total" "PAST PAGES FOR THIS ALERT ON THIS NODE (from the pager, newest first; 5 in its history):" "$prompt"
+check "past pages -> acked and cleared by itself" "- IRM #5611, paged 2026-11-04 00:16Z: acked by a person after 3 min; resolved on its own (the alert cleared) after 30 min" "$prompt"
+check "past pages -> still open, never acked" "- IRM #5595, paged 2026-11-03 22:16Z: never acked; still acknowledged" "$prompt"
+check "past pages -> unknown outcome" "- IRM #4766, paged 2026-10-21 10:00Z: outcome unknown" "$prompt"
+check "past pages -> brief line" "Past pages: 5 here, latest IRM #5611, paged 2026-11-04 00:16Z: acked by a person after 3 min" "$OUT"
+check "past pages -> in the report" "## Past pages (5 in the pager history)" "$(cat "$TMP/ws/memory/incidents/$(date -u +%Y-%m-%d)-Node_Disk_Pressure@c1@gpu-node-7.md")"
+run_investigate_line "$(notes_line gpu-node-9)" PATH="$TMP/bin:$PATH" KUBECONFIG_DIR="$TMP/kc"
+case "$(cat "$TMP/last_prompt")$OUT" in *"PAST PAGES"*|*"Past pages:"*) bad "no past pages -> no section" "got one" ;; *) ok "no past pages -> no section" ;; esac
+
 # 19. A real hardware fault (verdict page, failure mode hardware/fabric) on a
 #     cluster with a DC provider gets a pre-filled request in the house format.
 #     It names what is still missing, so it cannot pass for ready to send.
