@@ -959,6 +959,14 @@ func TestEventFromAlertReadsHostnameAsNode(t *testing.T) {
 	if ev.Node != "n1" {
 		t.Fatalf("node label must win: %q", ev.Node)
 	}
+	for inst, want := range map[string]string{
+		"b200-worker-unbiased-teal": "b200-worker-unbiased-teal",
+		"10.32.10.114:2381":         "", "10.32.10.114": "", "https://69.8.146.226/healthz": "",
+	} {
+		if ev := eventFromAlert("irm", pager.Alert{Labels: map[string]string{"instance": inst}}); ev.Node != want {
+			t.Errorf("instance %q: node %q, want %q", inst, ev.Node, want)
+		}
+	}
 }
 
 // `file` right after the skill found the existing request, or while a run is

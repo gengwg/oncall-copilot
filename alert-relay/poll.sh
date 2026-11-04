@@ -194,12 +194,18 @@ for g in "${groups[@]}"; do
   fi
 
   # The relay's line shape, built from the group's firing alert. Some rules
-  # name the node in a Hostname label; read it as node here, once, so dedup,
-  # node evidence, the contained-Xid hold and the outbox all see it.
+  # name the node in a Hostname label, and node-exporter rules only in
+  # instance; read either as node here, once, so dedup, node evidence, the
+  # contained-Xid hold and the outbox all see it. An instance is a node only
+  # as a bare name: host:port, an IP or a URL is a scrape target or a probe.
   line=$(printf '%s' "$g" | jq -c --arg pager "$ONCALL_PAGER" --arg label "$LABEL" \
     '{status: "firing"} + .alert + {pager: $pager, label: $label, ref, url, paged_at: (.paged_at // "")}
-     | if (.labels | type) == "object" and (.labels.node // "") == "" and (.labels.Hostname // "") != ""
-       then .labels.node = .labels.Hostname else . end')
+     | if (.labels | type) == "object" and (.labels.node // "") == "" then
+         (.labels.instance // "") as $i
+         | if (.labels.Hostname // "") != "" then .labels.node = .labels.Hostname
+           elif ($i | test("^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$")) and ($i | test("^[0-9.]+$") | not)
+           then .labels.node = $i else . end
+       else . end')
   # Two different checks. The same alert on the same node is one problem. The
   # same alert on other nodes is separate hardware and gets its own brief, up
   # to STORM_MAX per alert and cluster per window: a label rename that fires on

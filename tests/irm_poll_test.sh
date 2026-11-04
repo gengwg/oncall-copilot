@@ -135,6 +135,25 @@ run_poll
 check "Hostname label -> read as node" '"node":"gpu-node-h"' "$(tail -1 "$TMP/investigated")"
 check "Hostname label -> original label kept" '"Hostname":"gpu-node-h"' "$(tail -1 "$TMP/investigated")"
 
+# Many node-exporter rules name the node only in instance (MD RAID, IB rails,
+# memory, telemetry lost). A bare name is the node; host:port, an IP or a URL
+# is a scrape target or probe, not a node.
+inst_group() { # inst_group <id> <num> <instance>
+  group "$1" "$2" new 'MD RAID Array Degraded' c2 critical | jq -c --arg i "$3" '.last_alert.payload.alerts[0].labels |= (del(.node) + {instance:$i})'
+}
+for c in "G10 110 b200-worker-unbiased-teal node" "G11 111 10.32.10.114:2381 none" "G12 112 https://69.8.146.226/healthz none" "G13 113 10.32.10.114 none"; do
+  read -r id num inst want <<<"$c"
+  : > "$TMP/investigated"
+  set_groups "$(inst_group "$id" "$num" "$inst")" "$(group G9 109 new 'GPU XID hardware fault (critical)' c2 critical)" \
+    "$(group G3 103 new GpuFellOff c2 critical)" "$(group G2 102 new XidCritical c1 critical)" "$(group G1 101 acknowledged NvlinkDown c1 warning)"
+  run_poll
+  if [ "$want" = node ]; then
+    check "instance $inst -> read as node" "\"node\":\"$inst\"" "$(cat "$TMP/investigated")"
+  else
+    lacks "instance $inst -> not a node" '"node":' "$(cat "$TMP/investigated")"
+  fi
+done
+
 # 3. Polling again changes nothing.
 : > "$TMP/investigated"
 run_poll

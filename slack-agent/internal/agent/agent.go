@@ -790,6 +790,13 @@ func (a *Agent) note(ev event.Event, text string) string {
 	return fmt.Sprintf("Noted for %s. Later briefs on it include this.", where)
 }
 
+// An instance label names a node only as a bare name: host:port, an IP or a
+// URL is a scrape target or a probe.
+var (
+	bareHost = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$`)
+	ipv4ish  = regexp.MustCompile(`^[0-9.]+$`)
+)
+
 // eventFromAlert builds the event the DC runner and replies need from an alert
 // the owner pointed at by hand. There is no brief, so the verdict fields say so.
 func eventFromAlert(name string, a pager.Alert) event.Event {
@@ -797,10 +804,14 @@ func eventFromAlert(name string, a pager.Alert) event.Event {
 	if name == "" {
 		name = "irm"
 	}
-	// Some rules name the node Hostname; poll.sh reads it the same way.
+	// Some rules name the node Hostname, node-exporter rules only instance;
+	// poll.sh reads them the same way.
 	node := l["node"]
 	if node == "" {
 		node = l["Hostname"]
+	}
+	if node == "" && bareHost.MatchString(l["instance"]) && !ipv4ish.MatchString(l["instance"]) {
+		node = l["instance"]
 	}
 	return event.Event{Pager: name, ID: a.ID, Ref: a.Ref, URL: a.URL, Alertname: l["alertname"],
 		Severity: l["severity"], Cluster: l["cluster"], Node: node, StartsAt: a.StartsAt,
