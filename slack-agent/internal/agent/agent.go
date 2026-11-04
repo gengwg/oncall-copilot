@@ -699,8 +699,13 @@ func eventFromAlert(name string, a pager.Alert) event.Event {
 	if name == "" {
 		name = "irm"
 	}
+	// Some rules name the node Hostname; poll.sh reads it the same way.
+	node := l["node"]
+	if node == "" {
+		node = l["Hostname"]
+	}
 	return event.Event{Pager: name, ID: a.ID, Ref: a.Ref, URL: a.URL, Alertname: l["alertname"],
-		Severity: l["severity"], Cluster: l["cluster"], Node: l["node"], StartsAt: a.StartsAt,
+		Severity: l["severity"], Cluster: l["cluster"], Node: node, StartsAt: a.StartsAt,
 		Fault: "manual", Verdict: "manual", FailureMode: "manual", Brief: "(attached by hand, no brief)",
 		TS: time.Now().UTC().Format(time.RFC3339)}
 }

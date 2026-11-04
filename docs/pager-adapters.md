@@ -53,7 +53,7 @@ other name shows as itself). `pager.Label` in the agent does the same.
 `poll.sh` writes one `$OUTBOX_DIR/<id>.json` per brief, written whole and then renamed.
 Keys: `pager`, `id`, `ref` (string), `url`, `alertname`, `severity`, `cluster`,
 `node`, `starts_at`, `fault`, `verdict`, `failure_mode`, `degraded`, `dc_draft`,
-`brief`, `ts`. `cluster` and `node` are lifted from `alert.labels`.
+`brief`, `ts`. `cluster` and `node` are lifted from `alert.labels`; a rule that names the node `Hostname` is read as `node`.
 
 For `irm` the poller also writes the legacy keys `irm_id`, `irm_number` (a number,
 null when `ref` is not numeric) and `irm_url`.
