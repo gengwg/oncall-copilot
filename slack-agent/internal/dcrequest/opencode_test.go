@@ -119,7 +119,7 @@ func TestOpenCodeAgentDeniesFirstAndKeepsTheDenyList(t *testing.T) {
 		}
 	}
 	args := strings.Join(OpenCodeArgs("p", ""), " ")
-	if args != "run --format json --agent dc-draft p" {
+	if args != "run --standalone --format json --agent dc-draft p" {
 		t.Errorf("args: %s", args)
 	}
 	if strings.Contains(strings.Join(OpenCodeArgs("p", "x/y"), " "), "--auto") {

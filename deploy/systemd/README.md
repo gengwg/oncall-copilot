@@ -104,15 +104,23 @@ OpenCode on the host has, as the owner:
 
 The agent sets its own OpenCode agent, `dc-draft`, through
 `OPENCODE_CONFIG_CONTENT`: deny everything first, then allow read, look and
-the Slack draft, with the same kubectl deny list as the Claude run. OpenCode
-appends it after its defaults and the host's config, and the last matching
-rule wins. Check that on the host before turning it on; the tail of the list
-must start with `["*","*","deny"]` and nothing after it may allow a send:
+the Slack draft, with the same kubectl deny list as the Claude run. It needs
+OpenCode 2 and runs it with `--standalone`: otherwise `opencode run` goes to
+the host's background service, which never sees that variable and has no
+`dc-draft` agent. OpenCode appends the agent's rules after its defaults and
+the host's config, and the last matching rule wins. Check that on the host
+before turning it on; the tail must start with `["*","*","deny"]` and nothing
+after it may allow a send:
 
 ```sh
 cd ~/Aranya/metarepo && OPENCODE_CONFIG_CONTENT="$(~/.local/bin/oncall-slack-agent -opencode-agent)" \
-  opencode debug agent dc-draft | jq -c '.permission[] | [.permission, .pattern, .action]' | tail -40
+  opencode debug agents --standalone | jq -c '.[] | select(.id == "dc-draft") | .permissions[] | [.action, .resource, .effect]' | tail -40
 ```
+
+The Slack MCP server's tool names must end in the names the agent allows
+(`slack_read_channel`, `slack_read_thread`, `slack_search_*`,
+`slack_send_message_draft`); a server with other names, such as the community
+`slack-mcp-server`, can read nothing and draft nothing under `dc-draft`.
 
 ## IRM token
 
