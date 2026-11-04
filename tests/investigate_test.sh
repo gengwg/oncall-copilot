@@ -125,18 +125,26 @@ class H(BaseHTTPRequestHandler):
             verdict += "\nFAILURE MODE: hardware - GPU off the bus\nFAULT: real - Xid 79 condition is active\nVERDICT: hold - node already cordoned and drained"
         if os.path.exists(sys.argv[2] + ".hwfalse"):
             verdict += "\nFAILURE MODE: hardware - looks like NVLink\nFAULT: false-alarm - known exporter artifact, links verified up\nVERDICT: hold - not a fault"
-        body = json.dumps({"choices": [{"message": {"content":
-            "Need to output in format:\nROOT CAUSE: <2 sentences>\nCONFIDENCE: <high|medium|low>\n"
+        if os.path.exists(sys.argv[2] + ".fmother"):
+            verdict += "\nFAILURE MODE: other - not enough evidence to say\nFAULT: real - the condition is active\nVERDICT: page - needs a look"
+        template = ("Need to output in format:\nROOT CAUSE: <2 sentences>\nCONFIDENCE: <high|medium|low>\n"
             "RULED OUT: <cause - evidence against it>\nACTION: <1 sentence>\nFAILURE MODE: <one word>\n"
-            "VERDICT: <page|hold> - <why>\n\n"
-            "ROOT CAUSE: Injected upstream dial timeouts are failing roughly half of all requests reaching the service, "
+            "VERDICT: <page|hold> - <why>\n\n")
+        cause = ("ROOT CAUSE: Injected upstream dial timeouts are failing roughly half of all requests reaching the service, "
             "while the process itself remains entirely healthy, which rules out local resource exhaustion and points "
-            "squarely at an unreachable downstream dependency somewhere beyond the pod boundary.\n"
+            "squarely at an unreachable downstream dependency somewhere beyond the pod boundary.\n")
+        # A .causeonly flag ends the reply after ROOT CAUSE, the way a model
+        # sometimes drops every later line (2026-11-04, IRM #5646).
+        if os.path.exists(sys.argv[2] + ".causeonly"):
+            content = template + cause
+        else:
+            content = (template + cause +
             "CONFIDENCE: high - upstream dial timeout in every error log line\n"
             "RULED OUT: memory exhaustion - heap is flat at 100MB\n"
             "ACTION: Run /chaos/stop on demo-app, then verify the Kubernetes service endpoints and NetworkPolicy rules "
             "for every downstream dependency it calls.\n"
-            "FAILURE MODE: Dependency - upstream dial timeouts" + verdict}}]}).encode()
+            "FAILURE MODE: Dependency - upstream dial timeouts" + verdict)
+        body = json.dumps({"choices": [{"message": {"content": content}}]}).encode()
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(body)))
@@ -604,6 +612,29 @@ if ls "$TMP"/dc/*.md >/dev/null 2>&1; then
 else
   ok "false alarm or no provider -> no draft"
 fi
+
+# A GPU or NVLink alert whose reply leaves out FAILURE MODE is a hardware fault,
+# so it still gets its draft (2026-11-04, IRM #5646: the reply stopped after
+# ROOT CAUSE and the NVLink fault got no draft). An explicit "other" from the
+# model stands, and other alerts keep "other".
+touch "$TMP/last_prompt.causeonly"
+command rm -f "$TMP"/dc/*.md
+run_investigate_line "$(node_line c1 'GPU NVLink Link Down (node-problem-detector)')" "${DC[@]}"
+check "GPU alert, no failure mode -> hardware" "Failure mode: hardware" "$OUT"
+check "GPU alert, no failure mode -> draft written" "DC draft: $TMP/dc/" "$OUT"
+command rm -f "$TMP"/dc/*.md
+run_investigate_line "$(node_line c1 'IB Rail Down')" "${DC[@]}"
+check "non-GPU alert, no failure mode -> other" "Failure mode: other" "$OUT"
+if ls "$TMP"/dc/*.md >/dev/null 2>&1; then bad "non-GPU alert, no failure mode -> no draft" "$(ls "$TMP/dc")"; else ok "non-GPU alert, no failure mode -> no draft"; fi
+rm -f "$TMP/last_prompt.causeonly"
+touch "$TMP/last_prompt.fmother"
+run_investigate_line "$(node_line c1 'GPU NVLink Link Down (node-problem-detector)')" "${DC[@]}"
+rm -f "$TMP/last_prompt.fmother"
+check "GPU alert, model says other -> other" "Failure mode: other" "$OUT"
+if ls "$TMP"/dc/*.md >/dev/null 2>&1; then bad "GPU alert, model says other -> no draft" "$(ls "$TMP/dc")"; else ok "GPU alert, model says other -> no draft"; fi
+# A failed model call is not a reply, so it is not read as hardware either.
+run_investigate_line "$(node_line c1 'GPU NVLink Link Down (node-problem-detector)')" "${DC[@]}" INFERENCE_URL="http://127.0.0.1:9/v1/chat/completions"
+check "GPU alert, model call failed -> other" "Failure mode: other" "$OUT"
 
 # 20. A known Xid on a node that is already contained (cordoned, or carrying the
 #     gpu-fault taint) is held and always handed to the DC flow, which decides
