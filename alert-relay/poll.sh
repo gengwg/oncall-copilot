@@ -24,7 +24,15 @@
 #      SEVERITIES (default "critical warning"),
 #      HEARTBEAT_URL (optional heartbeat endpoint; holds a secret),
 #      DEGRADED_HOLD_AFTER (default 2 degraded briefs in a row),
-#      OUTBOX_DIR (optional; one JSON event per brief for the Slack agent).
+#      OUTBOX_DIR (optional; one JSON event per brief for the Slack agent),
+#      HISTORY_DAYS (default 90; 0 turns off the first-run backfill),
+#      HISTORY_PAST (default 3 past pages handed to each investigation).
+#
+# Optional adapter modes, for past pages of the same alert on the same node:
+# `page <n>` prints page n (1 newest) in the same JSONL, nothing past the last
+# page; `outcome <id>` prints {id, ref, state, paged_at, acked_at,
+# acked_by_person, resolved_at, resolved_by_person}. An adapter without them
+# exits non-zero for them and briefs simply get no past pages.
 # Usage: poll.sh   (run every 30-60s from a timer)
 set -uo pipefail
 
@@ -68,6 +76,9 @@ SEEN="$STATE_DIR/seen"
 STORM="$STATE_DIR/storm"
 DEGRADED="$STATE_DIR/degraded"
 STREAK="$STATE_DIR/degraded-streak"
+HISTORY="$STATE_DIR/history.tsv"
+HISTORY_DAYS="${HISTORY_DAYS:-90}"
+HISTORY_PAST="${HISTORY_PAST:-3}"
 
 mkdir -p "$STATE_DIR"
 exec 9>>"$STATE_DIR/.poll.lock"
@@ -142,6 +153,75 @@ jq empty "$body" 2>/dev/null || {
   exit 1
 }
 
+# The relay's line shape, built from a group's firing alert. Some rules name
+# the node in a Hostname label, and node-exporter rules only in instance; read
+# either as node here, once, so dedup, node evidence, the contained-Xid hold,
+# past pages and the outbox all see it. An instance is a node only as a bare
+# name: host:port, an IP or a URL is a scrape target or a probe.
+LINE_JQ='{status: "firing"} + .alert + {pager: $pager, label: $label, ref, url, paged_at: (.paged_at // "")}
+  | if (.labels | type) == "object" and (.labels.node // "") == "" then
+      (.labels.instance // "") as $i
+      | if (.labels.Hostname // "") != "" then .labels.node = .labels.Hostname
+        elif ($i | test("^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$")) and ($i | test("^[0-9.]+$") | not)
+        then .labels.node = $i else . end
+    else . end'
+
+# Past pages: history.tsv holds one "paged_at id ref alertname cluster node"
+# row per group ever listed, so a brief can say how the same alert on the same
+# node went before, including pages from before this host's own briefs.
+history_rows() { # history_rows <jsonl-file>: TSV rows for its groups
+  jq -r --arg pager "$ONCALL_PAGER" --arg label "$LABEL" '. as $g | select((.alert.alertname // "") != "")
+    | ('"$LINE_JQ"') | [.paged_at, $g.id, .ref, .alertname, (.labels.cluster // ""), (.labels.node // "")]
+    | map(tostring | gsub("[\t\r\n]"; " ")) | @tsv' "$1" 2>/dev/null
+}
+record_history() { # record_history <jsonl-file>
+  [ -f "$HISTORY" ] || return 0
+  history_rows "$1" >> "$HISTORY"
+  sort -t$'\t' -k1,1 "$HISTORY" | awk -F'\t' '!seen[$2]++' | tail -n 20000 > "$HISTORY.tmp" && mv "$HISTORY.tmp" "$HISTORY"
+}
+# Once, when there is no history yet: page back to HISTORY_DAYS. Stops at an
+# empty page, a page older than the cutoff, a page with nothing new, or 200
+# pages. A failed page keeps what was read; the rest fills in as groups arrive.
+backfill_history() {
+  [ -f "$HISTORY" ] && return 0
+  local cutoff p page rows oldest n
+  if [ "$HISTORY_DAYS" -le 0 ] 2>/dev/null; then : > "$HISTORY"; return 0; fi
+  cutoff=$(date -u -d "-$HISTORY_DAYS days" +%Y-%m-%dT%H:%M:%SZ)
+  history_rows "$body" > "$HISTORY.new"
+  page=$(mktemp)
+  for p in $(seq 2 200); do
+    bash "$ADAPTER" page "$p" > "$page" 2>/dev/null || break
+    rows=$(history_rows "$page")
+    [ -n "$rows" ] || break
+    n=$(printf '%s\n' "$rows" | awk -F'\t' 'NR == FNR { s[$2] = 1; next } !($2 in s)' "$HISTORY.new" - | wc -l)
+    [ "$n" -gt 0 ] || break
+    printf '%s\n' "$rows" >> "$HISTORY.new"
+    oldest=$(printf '%s\n' "$rows" | cut -f1 | sort | head -1)
+    [[ "$oldest" < "$cutoff" ]] && break
+  done
+  rm -f "$page"
+  awk -F'\t' -v c="$cutoff" '$1 >= c' "$HISTORY.new" | sort -t$'\t' -k1,1 | awk -F'\t' '!seen[$2]++' > "$HISTORY"
+  rm -f "$HISTORY.new"
+  echo "history: $(wc -l < "$HISTORY") past alert groups back to $cutoff"
+}
+past_matches() { # past_matches <alertname> <cluster> <node> <id> <paged_at>: "paged_at id ref", oldest first
+  awk -F'\t' -v a="$1" -v c="$2" -v n="$3" -v id="$4" -v at="$5" \
+    '$4 == a && $5 == c && $6 == n && $2 != id && (at == "" || $1 < at) { print $1 "\t" $2 "\t" $3 }' "$HISTORY" 2>/dev/null | sort
+}
+past_pages() { # past_pages <alertname> <cluster> <node> <id> <paged_at>: JSON array, newest first
+  local ids out o
+  ids=$(past_matches "$@" | tail -n "$HISTORY_PAST" | tac)
+  [ -n "$ids" ] || { echo '[]'; return 0; }
+  out=$(while IFS=$'\t' read -r at hid ref; do
+    o=$(bash "$ADAPTER" outcome "$hid" 2>/dev/null | jq -c --arg id "$hid" 'select(.id == $id)' 2>/dev/null)
+    [ -n "$o" ] || o=$(jq -nc --arg id "$hid" --arg ref "$ref" --arg at "$at" '{id: $id, ref: $ref, paged_at: ($at | sub("\\.[0-9]+"; "")), state: "unknown"}')
+    printf '%s\n' "$o"
+  done <<< "$ids")
+  printf '%s\n' "$out" | jq -sc .
+}
+backfill_history
+record_history "$body"
+
 # The first run records what already exists rather than investigating a backlog.
 if [ ! -f "$SEEN" ]; then
   jq -r '.id' "$body" > "$SEEN"
@@ -193,19 +273,7 @@ for g in "${groups[@]}"; do
     continue
   fi
 
-  # The relay's line shape, built from the group's firing alert. Some rules
-  # name the node in a Hostname label, and node-exporter rules only in
-  # instance; read either as node here, once, so dedup, node evidence, the
-  # contained-Xid hold and the outbox all see it. An instance is a node only
-  # as a bare name: host:port, an IP or a URL is a scrape target or a probe.
-  line=$(printf '%s' "$g" | jq -c --arg pager "$ONCALL_PAGER" --arg label "$LABEL" \
-    '{status: "firing"} + .alert + {pager: $pager, label: $label, ref, url, paged_at: (.paged_at // "")}
-     | if (.labels | type) == "object" and (.labels.node // "") == "" then
-         (.labels.instance // "") as $i
-         | if (.labels.Hostname // "") != "" then .labels.node = .labels.Hostname
-           elif ($i | test("^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$")) and ($i | test("^[0-9.]+$") | not)
-           then .labels.node = $i else . end
-       else . end')
+  line=$(printf '%s' "$g" | jq -c --arg pager "$ONCALL_PAGER" --arg label "$LABEL" "$LINE_JQ")
   # Two different checks. The same alert on the same node is one problem. The
   # same alert on other nodes is separate hardware and gets its own brief, up
   # to STORM_MAX per alert and cluster per window: a label rename that fires on
@@ -224,6 +292,16 @@ for g in "${groups[@]}"; do
     continue
   fi
   printf '%s\t%s\n' "$key" "$now" >> "$STORM"
+
+  # The same alert on the same node before: the newest HISTORY_PAST with their
+  # outcomes, and how many there were.
+  k_alert=$(printf '%s' "$line" | jq -r '.alertname // ""')
+  k_cluster=$(printf '%s' "$line" | jq -r '.labels.cluster // ""')
+  k_node=$(printf '%s' "$line" | jq -r '.labels.node // ""')
+  k_at=$(printf '%s' "$line" | jq -r '.paged_at // ""')
+  past=$(past_pages "$k_alert" "$k_cluster" "$k_node" "$id" "$k_at")
+  total=$(past_matches "$k_alert" "$k_cluster" "$k_node" "$id" "$k_at" | wc -l)
+  line=$(printf '%s' "$line" | jq -c --argjson past "${past:-[]}" --argjson total "${total:-0}" '. + {past_pages: $past, past_pages_total: $total}')
 
   brief=$(bash "$INVESTIGATE" "$line" 2>>"$STATE_DIR/investigate.err")
   log "$num" "$id" "${brief:-investigation produced no brief (see $STATE_DIR/investigate.err)}"

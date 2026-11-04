@@ -169,6 +169,24 @@ if [ -n "$NOTES_DIR" ] && [ -n "$cluster" ] && [ -r "$notes_file" ]; then
   owner_notes=$(tail -n 5 "$notes_file" | awk -F'\t' 'NF >= 4 { print "- " substr($1, 1, 10) ", on " $2 " " $3 ": " substr($4, 1, 600) }')
   notes_latest=$(tail -n 1 "$notes_file" | cut -c1-10)
 fi
+# How the same alert on the same node went before, from the pager (the poller
+# adds these): who acked, and whether a person resolved it or it cleared.
+past_lines=$(printf '%s' "$alert_json" | jq -r --arg label "$(printf '%s' "$alert_json" | jq -r '.label // "IRM"')" '
+  def t: try (sub("\\.[0-9]+"; "") | fromdateiso8601) catch null;
+  def mins($a; $b): (($b | t) - ($a | t)) / 60 | floor | tostring;
+  (.past_pages // [])[] | "- " + $label + " #" + (.ref // "?") + ", paged " + ((.paged_at // "")[0:16] | sub("T"; " ")) + "Z: "
+    + (if (.acked_at // "") != "" then (if .acked_by_person then "acked by a person" else "acked" end) + " after " + mins(.paged_at; .acked_at) + " min"
+       elif .state == "unknown" then "outcome unknown" else "never acked" end)
+    + (if (.resolved_at // "") != "" then "; resolved " + (if .resolved_by_person then "by a person" else "on its own (the alert cleared)" end) + " after " + mins(.paged_at; .resolved_at) + " min"
+       elif .state == "unknown" then "" else "; still " + (.state // "open") end)' 2>/dev/null)
+past_total=$(printf '%s' "$alert_json" | jq -r '.past_pages_total // 0' 2>/dev/null)
+case "$past_total" in ""|*[!0-9]*) past_total=0 ;; esac
+past_section=""
+[ -n "$past_lines" ] && past_section="
+PAST PAGES FOR THIS ALERT ON THIS NODE (from the pager, newest first; $past_total in its history):
+$past_lines
+"
+
 notes_section=""
 [ -n "$owner_notes" ] && notes_section="
 OWNER NOTES FOR THIS NODE (the on-call owner's own findings, newest last; where they disagree with the previous incident, they are right):
@@ -398,7 +416,7 @@ $web_context
 
 PREVIOUS INCIDENT FOR THIS ALERT ($prev_seen):
 $prev_cause
-$notes_section
+$past_section$notes_section
 RUNBOOK EXCERPT:
 $(printf '%s' "$runbook" | head -20)
 
@@ -584,6 +602,7 @@ fi
   printf '## Root cause\n%s\n\n' "$rootcause"
   printf '## Ruled out\n%s\n\n' "$ruled_out"
   [ -n "$owner_notes" ] && printf '## Owner notes\n%s\n\n' "$owner_notes"
+  [ -n "$past_lines" ] && printf '## Past pages (%s in the pager history)\n%s\n\n' "$past_total" "$past_lines"
   printf '## Timeline\n'
   printf -- '- condition true: %s\n' "$(hms "$pending_s")"
   printf -- '- alert fired: %s\n' "$(hms "$start_s")"
@@ -613,6 +632,9 @@ if [ -n "$disk_trend" ]; then
 fi
 if [ -n "$degraded" ]; then
   printf 'Degraded: %s\n' "$degraded"
+fi
+if [ -n "$past_lines" ]; then
+  printf 'Past pages: %s here, latest %s\n' "$past_total" "$(printf '%s\n' "$past_lines" | head -1 | sed 's/^- //' | clip 140)"
 fi
 if [ "$notes_count" -gt 0 ]; then
   printf 'Owner notes: %s on file, latest %s\n' "$notes_count" "$notes_latest"

@@ -39,6 +39,22 @@ JSONL on stdout, oldest first, one object per alert group:
   not read as "no new alerts". Empty output with exit 0 means no groups.
 - Output that is not valid JSON is also treated as a failed poll.
 
+Two optional modes give briefs the past pages of the same alert on the same
+node (`past_pages` on the investigated line):
+
+- `pagers/<name>.sh page <n>` prints page `n` (1 is the newest) in the same
+  JSONL, and nothing once past the last page. On its first run `poll.sh` pages
+  back `HISTORY_DAYS` (default 90) into `history.tsv` in its state dir; after
+  that every listed group is added as it is seen.
+- `pagers/<name>.sh outcome <id>` prints one object: `{id, ref, state, paged_at,
+  acked_at, acked_by_person, resolved_at, resolved_by_person}`, timestamps
+  without fractional seconds, `""` when unset. `resolved_by_person: false` with
+  a `resolved_at` means the alert cleared on its own. `poll.sh` calls it for the
+  newest `HISTORY_PAST` (default 3) matches of each brief.
+
+An adapter without them exits non-zero for them; its briefs get no past pages
+and nothing else changes.
+
 What `pagers/irm.sh` does: it fetches the first 50 groups, reverses them, and takes
 the firing alert of each group (else its first alert). A group with no alerts
 gets an empty `severity` only when `commonLabels.severity` is also missing, and is then
