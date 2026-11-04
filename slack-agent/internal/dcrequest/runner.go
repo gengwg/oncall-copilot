@@ -33,6 +33,7 @@ type Result struct {
 	Status  Status
 	Detail  string  // channel, link or reason, from the RESULT line
 	CostUSD float64 // what claude reported for the run; 0 when unknown
+	Via     string  // the fallback that produced it; "" is Claude Code
 }
 
 type Runner interface {

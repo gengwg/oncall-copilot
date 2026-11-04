@@ -117,6 +117,7 @@ reads it on each run, so no restart). The agent's is
 | Slack app-level token | agent | open the Socket Mode connection | `SLACK_APP_TOKEN` | none recorded | the Slack app's settings |
 | Agent heartbeat URL | agent | ping its IRM heartbeat integration | `HEARTBEAT_URL` | none recorded | regenerate on the IRM integration |
 | Claude Code login | agent, DC drafts only | run the DC request skill headless, draft only, behind the runner's deny list | the owner's login on the host (`CLAUDE_BIN`) | login session | log in again on the host; until then the agent replies "DC request not drafted" with the failure reason |
+| OpenCode model and Slack MCP login (optional) | agent, DC drafts only when Claude Code is at its spend limit | the same skill and deny list, through OpenCode's `dc-draft` agent | the owner's OpenCode config on the host (`OPENCODE_BIN`; not set up as of 2026-11-04) | provider and Slack OAuth sessions | log in again in OpenCode; until then the fallback reply carries both failure reasons |
 
 Private but not secret: the `DC_PROVIDERS` TSV, `IRM_SCHEDULE_ID`,
 `ONCALL_ME` and `SLACK_OWNER_ID`. An expired poller token fails safe: the poll
