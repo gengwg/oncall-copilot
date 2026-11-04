@@ -35,6 +35,32 @@ func TestParseResult(t *testing.T) {
 	}
 }
 
+func TestExitFailureKeepsSpendLimitWhenStderrEmpty(t *testing.T) {
+	stdout := []byte("You've hit your individual spend limit · your weekly limit resets 2am (America/Los_Angeles)\n")
+	got := exitFailure(stdout, nil, fmt.Errorf("exit status 1"), false, time.Minute)
+	if got.Status != Failed {
+		t.Fatalf("status %s", got.Status)
+	}
+	if !strings.Contains(got.Detail, "exit status 1") || !strings.Contains(got.Detail, "individual spend limit") {
+		t.Fatalf("stdout reason dropped: %q", got.Detail)
+	}
+}
+
+func TestExitFailurePrefersStderr(t *testing.T) {
+	got := exitFailure([]byte("You've hit your individual spend limit"), []byte("ssh refused"), fmt.Errorf("exit status 1"), false, time.Minute)
+	if !strings.Contains(got.Detail, "ssh refused") || strings.Contains(got.Detail, "spend limit") {
+		t.Fatalf("stderr should win: %q", got.Detail)
+	}
+}
+
+func TestExitFailureTrustsResultLine(t *testing.T) {
+	stdout := []byte(`{"result":"RESULT: ALREADY_SENT https://slack/p1","total_cost_usd":0.4}`)
+	got := exitFailure(stdout, nil, fmt.Errorf("exit status 1"), false, time.Minute)
+	if got.Status != AlreadySent || got.Detail != "https://slack/p1" || got.CostUSD != 0.4 {
+		t.Fatalf("trusted result overwritten: %+v", got)
+	}
+}
+
 func TestBuildPromptAndArgs(t *testing.T) {
 	ev := event.Event{URL: "https://slack/p9", Cluster: "cheerful-tetra", Node: "gpu-7", Alertname: "GPU Xid Critical"}
 	at := time.Date(2026, 11, 3, 16, 0, 0, 0, time.UTC)

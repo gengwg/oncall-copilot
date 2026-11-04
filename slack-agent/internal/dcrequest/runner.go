@@ -155,20 +155,29 @@ func (r ExecRunner) FileDCRequest(ctx context.Context, ev event.Event) (Result, 
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	cmd.Env = os.Environ()
 	err := cmd.Run()
-	res := ParseResult(stdout.Bytes())
-	if err != nil {
-		reason := strings.TrimSpace(stderr.String())
-		if len(reason) > 300 {
-			reason = reason[:300]
-		}
-		if ctx.Err() != nil {
-			reason = "timed out after " + timeout.String()
-		}
-		if res.Status != Failed {
-			// A RESULT line we trust beats an exit code; but say so.
-			return res, nil
-		}
-		return Result{Status: Failed, Detail: fmt.Sprintf("claude exited: %v; %s", err, reason), CostUSD: res.CostUSD}, nil
+	return exitFailure(stdout.Bytes(), stderr.Bytes(), err, ctx.Err() != nil, timeout), nil
+}
+
+// exitFailure turns a non-zero claude exit into the DM's reason. The spend-limit
+// sentence is written to stdout and stderr is empty, so an empty stderr must
+// not replace it. A RESULT line still beats the exit code.
+func exitFailure(stdout, stderr []byte, runErr error, timedOut bool, timeout time.Duration) Result {
+	res := ParseResult(stdout)
+	if runErr == nil && !timedOut {
+		return res
 	}
-	return res, nil
+	if timedOut {
+		return Result{Status: Failed, Detail: "timed out after " + timeout.String(), CostUSD: res.CostUSD}
+	}
+	if res.Status != Failed {
+		return res
+	}
+	reason := strings.TrimSpace(string(stderr))
+	if reason == "" {
+		reason = strings.TrimPrefix(strings.TrimSpace(res.Detail), "no RESULT line: ")
+	}
+	if len(reason) > 300 {
+		reason = reason[:300]
+	}
+	return Result{Status: Failed, Detail: fmt.Sprintf("claude exited: %v; %s", runErr, reason), CostUSD: res.CostUSD}
 }
