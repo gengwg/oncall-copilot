@@ -17,6 +17,7 @@ import (
 	"github.com/gengwg/oncall-copilot/slack-agent/internal/event"
 	"github.com/gengwg/oncall-copilot/slack-agent/internal/health"
 	"github.com/gengwg/oncall-copilot/slack-agent/internal/ledger"
+	"github.com/gengwg/oncall-copilot/slack-agent/internal/notes"
 	"github.com/gengwg/oncall-copilot/slack-agent/internal/oncall"
 	"github.com/gengwg/oncall-copilot/slack-agent/internal/outbox"
 	"github.com/gengwg/oncall-copilot/slack-agent/internal/pager"
@@ -84,6 +85,9 @@ type Agent struct {
 	FailedPings    func() int
 	SkippedPings   func() int
 	RestorePings   func(failed, skipped int)
+	// Notes holds the owner's `note` replies per node; the poller feeds them
+	// into later briefs on that node.
+	Notes notes.Store
 
 	dcJobs chan dcJob
 }
@@ -584,7 +588,7 @@ func deref(s *string) string {
 
 // --- Replies from the owner.
 
-const help = "Reply in a brief's thread with `file` (draft the DC request now; `file again` to repeat a fresh check), `sent` (you sent the draft), `ignore` (never for this node for 14 days), `ack`, `unack`; or send `file #5474` / `file <alert link>` (also `sent`, `ack`, `unack`, `ignore`, or the bare link to attach it) as a new message for any alert; `status` anywhere."
+const help = "Reply in a brief's thread with `file` (draft the DC request now; `file again` to repeat a fresh check), `sent` (you sent the draft), `ignore` (never for this node for 14 days), `ack`, `unack`, `note <what you found>` (later briefs on this node include it; `note` alone lists them); or send `file #5474` / `file <alert link>` (also `sent`, `ack`, `unack`, `ignore`, or the bare link to attach it) as a new message for any alert; `status` anywhere."
 
 // slackLink strips Slack's <url|label> wrapping from a pasted link.
 var slackLink = regexp.MustCompile(`<([^|>]+)(?:\|[^>]*)?>`)
@@ -728,6 +732,8 @@ func (a *Agent) HandleInbound(ctx context.Context, in slackio.Inbound) {
 		rec.AckNote = "unacked on your instruction"
 		save(rec)
 		reply(in.ThreadTS, fmt.Sprintf("Unacked %s #%s; it escalates again.", a.label(), ev.Ref))
+	case "note":
+		reply(in.ThreadTS, a.note(ev, ref))
 	case "attach":
 		// Thread commands find a record by its one thread, so an alert that
 		// already has one (usually its brief) is pointed back there.
@@ -736,13 +742,42 @@ func (a *Agent) HandleInbound(ctx context.Context, in slackio.Inbound) {
 				a.label(), ev.Ref, ev.Alertname, orDash(ev.Cluster), orDash(ev.Node), ev.Ref, ev.Ref))
 			return
 		}
-		reply(in.ThreadTS, fmt.Sprintf("Attached %s #%s %s %s/%s. Reply here with `file`, `sent`, `ignore`, `ack` or `unack`.",
+		reply(in.ThreadTS, fmt.Sprintf("Attached %s #%s %s %s/%s. Reply here with `file`, `sent`, `ignore`, `ack`, `unack` or `note`.",
 			a.label(), ev.Ref, ev.Alertname, orDash(ev.Cluster), orDash(ev.Node)))
 	case "status":
 		reply(in.ThreadTS, a.status(ctx))
 	default:
 		reply(in.ThreadTS, help)
 	}
+}
+
+// note records the owner's finding for the alert's node, or lists the node's
+// notes when text is empty.
+func (a *Agent) note(ev event.Event, text string) string {
+	if ev.Cluster == "" {
+		return "This alert names no cluster, so there is nothing to keep a note on."
+	}
+	where := ev.Cluster + "/" + orDash(ev.Node)
+	if text == "" {
+		ns, err := a.Notes.List(ev.Cluster, ev.Node)
+		if err != nil {
+			return "Could not read the notes: " + err.Error()
+		}
+		if len(ns) == 0 {
+			return fmt.Sprintf("No notes for %s. Reply `note <what you found>` to add one.", where)
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "Notes for %s, oldest first:", where)
+		for _, n := range ns {
+			fmt.Fprintf(&b, "\n• %s, %s: %s", n.TS.In(time.Local).Format("Jan 2 15:04"), n.Ref, n.Text)
+		}
+		return b.String()
+	}
+	n := notes.Note{TS: a.now(), Ref: fmt.Sprintf("%s #%s", a.label(), ev.Ref), Alertname: ev.Alertname, Text: text}
+	if err := a.Notes.Append(ev.Cluster, ev.Node, n); err != nil {
+		return "Could not save the note: " + err.Error()
+	}
+	return fmt.Sprintf("Noted for %s. Later briefs on it include this.", where)
 }
 
 // eventFromAlert builds the event the DC runner and replies need from an alert

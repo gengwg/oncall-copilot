@@ -62,6 +62,14 @@ the operator's admin kubeconfigs, in a sandboxed unit (`ProtectHome`,
   briefs in a row (one upstream blip does not alert); once held, it stays held
   until a healthy brief. The 08:05 digest now carries a health line for both
   services, so a quiet heartbeat channel no longer means problems go unseen.
+- **The owner's notes outrank the previous brief.** `note <what you found>` in
+  a brief's thread keeps the finding for that cluster and node in
+  `/var/lib/oncall-copilot/notes/<cluster>@<node>.tsv`. The newest five reach
+  every later prompt on that node, marked as the owner's, and the brief says
+  `Owner notes: N on file`; `note` alone lists them. A previous brief is only
+  the model's guess. Why: on 2026-11-04 the owner found on the host what
+  filled a node's disk, and the copilot's next disk brief on that node still
+  suggested image GC, which could not free it. Notes never expire.
 - **A contained known Xid holds, and the DC flow follows up.** A `GPU Xid
   Critical` or `GPU XID hardware fault` alert on a mapped cluster whose node is cordoned or carries the
   gpu-fault taint gets the hold verdict "hold - contained known Xid (<reasons>)",

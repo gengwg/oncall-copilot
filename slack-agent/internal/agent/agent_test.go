@@ -16,6 +16,7 @@ import (
 	"github.com/gengwg/oncall-copilot/slack-agent/internal/event"
 	"github.com/gengwg/oncall-copilot/slack-agent/internal/irm"
 	"github.com/gengwg/oncall-copilot/slack-agent/internal/ledger"
+	"github.com/gengwg/oncall-copilot/slack-agent/internal/notes"
 	"github.com/gengwg/oncall-copilot/slack-agent/internal/oncall"
 	"github.com/gengwg/oncall-copilot/slack-agent/internal/pager"
 	"github.com/gengwg/oncall-copilot/slack-agent/internal/slackio"
@@ -483,6 +484,47 @@ func TestIgnoreReplySettlesTheNode(t *testing.T) {
 	h.tick()
 	if len(h.runner.calls) != 1 || h.rec("G2").DCStatus != "skipped_recent" {
 		t.Fatalf("after ignore the next alert on that node must not draft: calls=%v", h.runner.calls)
+	}
+}
+
+func TestNoteReplyKeepsAFindingForTheNode(t *testing.T) {
+	h := newHarness(t, myShift)
+	h.a.Notes = notes.Store{Dir: t.TempDir()}
+	h.put(ev("G1", 1, "critical", now))
+	h.tick()
+	ctx := context.Background()
+	h.a.HandleInbound(ctx, slackio.Inbound{ThreadTS: "ts1", Text: "note"})
+	if !strings.Contains(h.poster.lastReply(), "No notes for c1/n-G1") {
+		t.Fatalf("empty list: %q", h.poster.lastReply())
+	}
+	h.a.HandleInbound(ctx, slackio.Inbound{ThreadTS: "ts1", Text: "Note stargz store at /mnt/local fills /; GC can't see it"})
+	if !strings.Contains(h.poster.lastReply(), "Noted for c1/n-G1") {
+		t.Fatalf("note reply: %q", h.poster.lastReply())
+	}
+	ns, err := h.a.Notes.List("c1", "n-G1")
+	if err != nil || len(ns) != 1 {
+		t.Fatalf("notes = %v, %v", ns, err)
+	}
+	if n := ns[0]; n.Text != "stargz store at /mnt/local fills /; GC can't see it" || n.Ref != "IRM #1" || n.Alertname != "GPU Xid Critical" {
+		t.Fatalf("note kept its case and the alert it was written on: %+v", n)
+	}
+	h.a.HandleInbound(ctx, slackio.Inbound{ThreadTS: "ts1", Text: "note"})
+	if !strings.Contains(h.poster.lastReply(), "IRM #1: stargz store") {
+		t.Fatalf("list: %q", h.poster.lastReply())
+	}
+
+	h.a.Notes = notes.Store{}
+	h.a.HandleInbound(ctx, slackio.Inbound{ThreadTS: "ts1", Text: "note x"})
+	if !strings.Contains(h.poster.lastReply(), "NOTES_DIR is unset") {
+		t.Fatalf("notes off: %q", h.poster.lastReply())
+	}
+	e2 := ev("G2", 2, "critical", now)
+	e2.Cluster, e2.Node = "", ""
+	h.put(e2)
+	h.tick()
+	h.a.HandleInbound(ctx, slackio.Inbound{ThreadTS: h.rec("G2").SlackTS, Text: "note x"})
+	if !strings.Contains(h.poster.lastReply(), "names no cluster") {
+		t.Fatalf("no cluster: %q", h.poster.lastReply())
 	}
 }
 

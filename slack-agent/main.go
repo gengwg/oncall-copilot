@@ -21,6 +21,7 @@ import (
 	"github.com/gengwg/oncall-copilot/slack-agent/internal/event"
 	"github.com/gengwg/oncall-copilot/slack-agent/internal/irm"
 	"github.com/gengwg/oncall-copilot/slack-agent/internal/ledger"
+	"github.com/gengwg/oncall-copilot/slack-agent/internal/notes"
 	"github.com/gengwg/oncall-copilot/slack-agent/internal/oncall"
 	"github.com/gengwg/oncall-copilot/slack-agent/internal/slackio"
 )
@@ -56,6 +57,7 @@ func main() {
 		Runner: dcrequest.ExecRunner{Bin: cfg.ClaudeBin, Dir: cfg.MetarepoDir, Model: cfg.ClaudeModel, Timeout: 10 * time.Minute},
 		DryRun: cfg.AckDryRun, CollapseMax: cfg.CollapseMax, Log: lg,
 		DigestAt: cfg.DigestAt, DigestMarker: filepath.Join(cfg.AgentStateDir, "digest-last"),
+		Notes: notes.Store{Dir: cfg.NotesDir},
 	}
 	if cfg.DigestAt != "" {
 		a.DigestTZ, _ = time.LoadLocation(cfg.DigestTZ) // validated in config
