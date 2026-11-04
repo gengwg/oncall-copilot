@@ -50,6 +50,9 @@ const (
 	// A follow-up or an already-active ticket is the owner's roughly weekly
 	// check-in, so those results settle a node for less than a new request.
 	ticketedWindow = 7 * 24 * time.Hour
+	// A skill run that found the existing request is not worth repeating on
+	// `file` for a day; `file again` repeats it anyway.
+	alreadySentFresh = 24 * time.Hour
 )
 
 type Agent struct {
@@ -541,11 +544,31 @@ func (a *Agent) runDC(ctx context.Context, j dcJob) error {
 	if err := a.Ledger.Append(ledger.Entry{TS: now, Cluster: ev.Cluster, Node: ev.Node, ID: ev.ID, Status: status}); err != nil {
 		a.logf("dc %s: ledger write failed, the next alert on %s may draft again: %v", ev.ID, ev.Node, err)
 	}
-	rec.DCStatus = status
+	rec.DCStatus, rec.DCDetail = status, res.Detail
 	if err := a.Store.Save(rec); err != nil {
 		return err
 	}
 	return a.Poster.Reply(ctx, rec.SlackTS, msg)
+}
+
+// freshAlreadySent reports the skill's own finding from the last day that a
+// request for this node already exists, so `file` can repeat it instead of
+// paying for the same check again.
+func (a *Agent) freshAlreadySent(rec *event.Record) (string, bool) {
+	ev := rec.Event
+	now := a.now()
+	e, ok := a.Ledger.Recent(ev.Cluster, ev.Node, now.Add(-alreadySentFresh))
+	if !ok || e.Status != "already_sent" {
+		return "", false
+	}
+	detail := rec.DCDetail
+	if e.ID != rec.ID {
+		if other, err := a.Store.Get(e.ID); err == nil && other != nil {
+			detail = other.DCDetail
+		}
+	}
+	return fmt.Sprintf("DC request for %s/%s already exists: %s (checked %s, %s %s). Nothing drafted. Reply `file again` to check again.",
+		ev.Cluster, ev.Node, orDash(detail), e.TS.In(time.Local).Format("Jan 2 15:04"), a.label(), e.ID), true
 }
 
 func ticketedAndStale(e ledger.Entry, now time.Time) bool {
@@ -561,7 +584,7 @@ func deref(s *string) string {
 
 // --- Replies from the owner.
 
-const help = "Reply in a brief's thread with `file` (draft the DC request now), `sent` (you sent the draft), `ignore` (never for this node for 14 days), `ack`, `unack`; or send `file #5474` / `file <alert link>` (also `sent`, `ack`, `unack`, `ignore`) as a new message for any alert; `status` anywhere."
+const help = "Reply in a brief's thread with `file` (draft the DC request now; `file again` to repeat a fresh check), `sent` (you sent the draft), `ignore` (never for this node for 14 days), `ack`, `unack`; or send `file #5474` / `file <alert link>` (also `sent`, `ack`, `unack`, `ignore`) as a new message for any alert; `status` anywhere."
 
 // slackLink strips Slack's <url|label> wrapping from a pasted link.
 var slackLink = regexp.MustCompile(`<([^|>]+)(?:\|[^>]*)?>`)
@@ -572,6 +595,12 @@ func (a *Agent) HandleInbound(ctx context.Context, in slackio.Inbound) {
 	cmd, ref, _ := strings.Cut(text, " ")
 	cmd = strings.ToLower(cmd)
 	ref = strings.TrimSpace(ref)
+	again := false
+	if cmd == "file" {
+		if rest, ok := strings.CutPrefix(strings.ToLower(ref), "again"); ok && (rest == "" || rest[0] == ' ') {
+			again, ref = true, strings.TrimSpace(ref[len("again"):])
+		}
+	}
 	reply := func(ts, text string) {
 		if err := a.Poster.Reply(ctx, ts, text); err != nil {
 			a.logf("reply: %v", err)
@@ -629,6 +658,16 @@ func (a *Agent) HandleInbound(ctx context.Context, in slackio.Inbound) {
 	in.ThreadTS = threadTS
 	switch cmd {
 	case "file":
+		if !again {
+			if rec.DCStatus == "queued" {
+				reply(in.ThreadTS, fmt.Sprintf("A DC run for %s/%s is already queued; its result will appear here. Reply `file again` to queue another.", ev.Cluster, ev.Node))
+				return
+			}
+			if msg, ok := a.freshAlreadySent(rec); ok {
+				reply(in.ThreadTS, msg)
+				return
+			}
+		}
 		rec.DCStatus = "queued"
 		save(rec)
 		a.enqueue(dcJob{id: rec.ID, force: true})

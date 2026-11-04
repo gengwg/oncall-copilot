@@ -902,3 +902,80 @@ func TestEventFromAlertReadsHostnameAsNode(t *testing.T) {
 		t.Fatalf("node label must win: %q", ev.Node)
 	}
 }
+
+// `file` right after the skill found the existing request, or while a run is
+// still queued, re-ran the skill for nothing (2026-11-03: two alerts, two paid
+// runs each, no drafts). `file again` still forces a run.
+func TestFileDoesNotRerunAFreshAlreadySent(t *testing.T) {
+	h := newHarness(t, myShift)
+	h.runner.res = dcrequest.Result{Status: dcrequest.AlreadySent, Detail: "https://slack/p-old"}
+	h.put(withDraft(ev("G1", 1, "critical", now)))
+	h.tick()
+	if len(h.runner.calls) != 1 || h.rec("G1").DCStatus != "already_sent" {
+		t.Fatalf("calls=%v rec=%+v", h.runner.calls, h.rec("G1"))
+	}
+	ctx := context.Background()
+	thread := h.rec("G1").SlackTS
+
+	h.a.HandleInbound(ctx, slackio.Inbound{ThreadTS: thread, Text: "file"})
+	h.a.DrainDC(ctx)
+	if len(h.runner.calls) != 1 {
+		t.Fatalf("fresh already_sent must not re-run: calls=%v", h.runner.calls)
+	}
+	r := h.poster.lastReply()
+	if !strings.Contains(r, "already exists: https://slack/p-old") || !strings.Contains(r, "`file again`") {
+		t.Fatalf("reply: %q", r)
+	}
+
+	h.a.HandleInbound(ctx, slackio.Inbound{ThreadTS: thread, Text: "file again"})
+	h.a.DrainDC(ctx)
+	if len(h.runner.calls) != 2 {
+		t.Fatalf("`file again` must force a run: calls=%v", h.runner.calls)
+	}
+
+	// A day later the request may have moved on, so `file` checks again.
+	later := now.Add(25 * time.Hour)
+	h.a.Now = func() time.Time { return later }
+	h.a.HandleInbound(ctx, slackio.Inbound{ThreadTS: thread, Text: "file"})
+	h.a.DrainDC(ctx)
+	if len(h.runner.calls) != 3 {
+		t.Fatalf("stale already_sent must re-run: calls=%v", h.runner.calls)
+	}
+}
+
+func TestFileWhileQueuedDoesNotQueueAnother(t *testing.T) {
+	h := newHarness(t, myShift)
+	h.put(withDraft(ev("G1", 1, "critical", now)))
+	if err := h.a.Tick(context.Background()); err != nil { // posts and queues, does not drain
+		t.Fatal(err)
+	}
+	if h.rec("G1").DCStatus != "queued" {
+		t.Fatalf("rec=%+v", h.rec("G1"))
+	}
+	ctx := context.Background()
+	h.a.HandleInbound(ctx, slackio.Inbound{ThreadTS: h.rec("G1").SlackTS, Text: "file"})
+	if !strings.Contains(h.poster.lastReply(), "already queued") {
+		t.Fatalf("reply: %q", h.poster.lastReply())
+	}
+	h.a.DrainDC(ctx)
+	if len(h.runner.calls) != 1 {
+		t.Fatalf("one queued run, not two: calls=%v", h.runner.calls)
+	}
+}
+
+func TestFileAgainWithAlertReference(t *testing.T) {
+	h := newHarness(t, theirShift)
+	var g irm.Group
+	g.ID, g.Number, g.State = "X9", 5474, "firing"
+	g.LastAlert.Payload.Alerts = append(g.LastAlert.Payload.Alerts, struct {
+		Labels   map[string]string `json:"labels"`
+		StartsAt string            `json:"startsAt"`
+	}{Labels: map[string]string{"alertname": "GPU Xid Critical", "cluster": "c1", "node": "n1"}})
+	h.irm.findable = map[string]irm.Group{"#5474": g}
+	ctx := context.Background()
+	h.a.HandleInbound(ctx, slackio.Inbound{TS: "u1", Text: "file again #5474"})
+	h.a.DrainDC(ctx)
+	if len(h.runner.calls) != 1 || h.runner.calls[0] != "n1" {
+		t.Fatalf("calls=%v reply=%q", h.runner.calls, h.poster.lastReply())
+	}
+}
