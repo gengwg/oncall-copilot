@@ -525,6 +525,36 @@ case "$lacks_out" in
 esac
 check "one model failure -> retried brief is complete" "Likely cause: Injected upstream dial timeouts" "$OUT"
 
+# 18b. From the poller the brief counts from the page, and says how long the
+#      alert had been firing. A page for an alert firing over a day is a
+#      re-notification, and the prompt says so (2026-11-03: a 37 h old Xid
+#      latch briefed as "133714s after the alert fired").
+page_line() { # page_line <starts_at> <paged_at>
+  jq -nc --arg s "$1" --arg p "$2" '{status:"firing", alertname:"DemoHighLatency", severity:"warning", service:"demo-app",
+    summary:"s", description:"d", labels:{alertname:"DemoHighLatency"}, starts_at:$s, paged_at:$p,
+    pager:"irm", label:"IRM", ref:"77", url:""}'
+}
+old_start=$(date -u -d '-50 hours' +%Y-%m-%dT%H:%M:%SZ)
+run_investigate_line "$(page_line "$old_start" "$(date -u -d '-60 sec' +%Y-%m-%dT%H:%M:%SZ)")"
+check "old alert -> briefed from the page, with the alert's age" "after the page; the alert has been firing since $old_start (50h)" "$OUT"
+ttp=$(printf '%s' "$OUT" | sed -n 's/^Briefed \([0-9]*\)s after the page.*/\1/p')
+if [ -n "$ttp" ] && [ "$ttp" -ge 60 ] && [ "$ttp" -lt 90 ]; then ok "old alert -> seconds counted from the page"; else bad "old alert -> seconds counted from the page" "got '$ttp' from: $OUT"; fi
+check "old alert -> prompt calls it a re-notification" "re-notification of a standing condition" "$(cat "$TMP/last_prompt")"
+check "old alert -> prompt gives the age" "firing since $old_start, 49 hours before this page" "$(cat "$TMP/last_prompt")"
+
+run_investigate_line "$(page_line "$(date -u -d '-90 sec' +%Y-%m-%dT%H:%M:%SZ)" "$(date -u -d '-30 sec' +%Y-%m-%dT%H:%M:%SZ)")"
+fresh=$(printf '%s' "$OUT" | sed -n 's/^Briefed \([0-9]*\)s after the page, \([0-9]*\)s after the alert fired$/\1 \2/p')
+read -r f_page f_fired <<<"$fresh"
+if [ -n "$f_page" ] && [ "$f_page" -ge 30 ] && [ "$f_page" -lt 60 ] && [ "$f_fired" -ge 90 ] && [ "$f_fired" -lt 120 ]; then
+  ok "fresh alert -> seconds from the page and from firing"
+else
+  bad "fresh alert -> seconds from the page and from firing" "got '$fresh' from: $OUT"
+fi
+case "$(cat "$TMP/last_prompt")" in
+  *re-notification*) bad "fresh alert -> no re-notification note" "prompt has one" ;;
+  *) ok "fresh alert -> no re-notification note" ;;
+esac
+
 # 19. A real hardware fault (verdict page, failure mode hardware/fabric) on a
 #     cluster with a DC provider gets a pre-filled request in the house format.
 #     It names what is still missing, so it cannot pass for ready to send.
