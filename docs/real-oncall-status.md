@@ -50,6 +50,8 @@ the operator's admin kubeconfigs, in a sandboxed unit (`ProtectHome`,
 - **Facts the model must not infer are computed in code.** Live replays showed
   the model trusts the alert's wording over a condition missing from the
   evidence, so the alert condition's state and timing are stated outright.
+  Disk alerts get the root filesystem's free space now, 6 h and 24 h ago, and
+  the hours to full at the 24 h rate, from node-exporter.
 - **"Previous" is the same alert on the same node.** Incident reports are
   named `<date>-<alert>@<cluster>@<node>.md`, and the previous incident and
   the related one are looked up by the report's Service line, so reports from

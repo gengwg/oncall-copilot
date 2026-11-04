@@ -293,6 +293,37 @@ if [ -n "$node" ]; then
   fi
 fi
 
+# A disk alert's root filesystem now, 6 h and 24 h ago, from node-exporter
+# (instance is the node name on these clusters; max() folds duplicate scrapes).
+# Image GC freeing nothing says nothing about what is filling the disk; the
+# fill rate says how long there is.
+disk_trend=""
+case "$alertname" in *Disk*|*disk*|*Filesystem*|*filesystem*)
+  if [ -n "$cluster" ] && [ -n "$node" ]; then
+    sel="cluster=\"$cluster\",instance=\"$node\",mountpoint=\"/\""
+    fsq() { $PROM instant "$1" 2>/dev/null | jq -r '.value // empty' 2>/dev/null | head -1; }
+    disk_trend=$(awk -v a="$(fsq "max(node_filesystem_avail_bytes{$sel})")" \
+      -v s="$(fsq "max(node_filesystem_size_bytes{$sel})")" \
+      -v a6="$(fsq "max(node_filesystem_avail_bytes{$sel} offset 6h)")" \
+      -v a24="$(fsq "max(node_filesystem_avail_bytes{$sel} offset 24h)")" \
+      -v where="$node in $cluster" '
+      function num(x) { return x ~ /^[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?$/ }
+      function gb(x) { return sprintf("%.0f GB", x / 1e9) }
+      BEGIN {
+        if (!num(a) || !num(s) || s <= 0) { print "no node-exporter series for " where; exit }
+        out = gb(a) " free of " gb(s) " (" sprintf("%.1f", 100 * a / s) "%)"
+        if (num(a6)) out = out "; " gb(a6) " free 6 h ago"
+        if (num(a24)) {
+          d = a - a24
+          out = out ", " gb(a24) " free 24 h ago (" (d >= 0 ? "+" : "-") gb(d < 0 ? -d : d) " in 24 h)"
+          if (d < 0) out = out "; full in about " sprintf("%.0f", a / (-d / 24)) " h at the 24 h rate"
+        }
+        print out
+      }')
+    disk_trend="root filesystem /: $disk_trend"
+  fi ;;
+esac
+
 # Every field n/a and no logs means the collectors are broken -- unreadable
 # skill scripts, an unreachable Prometheus -- not a mysterious incident. The
 # n/a fallback above is what makes that look like a normal quiet page, so say
@@ -337,7 +368,8 @@ LIVE EVIDENCE:
 - error_ratio_5m: $err_ratio
 - heap_alloc_bytes: $heap
 - heap_trend: ${heap_trend:-n/a}
-- latency_mode: $lat_mode$node_section
+- latency_mode: $lat_mode${disk_trend:+
+- $disk_trend}$node_section
 - recent logs (${lookback}m window from alert start):
 $err_logs
 
@@ -541,6 +573,7 @@ fi
   printf -- '- heap_alloc_bytes: %s\n' "$heap"
   printf -- '- heap_trend: %s\n' "${heap_trend:-n/a}"
   printf -- '- latency_mode: %s\n' "$lat_mode"
+  [ -n "$disk_trend" ] && printf -- '- %s\n' "$disk_trend"
   [ -n "$node" ] && printf -- '- node %s:\n```\n%s\n```\n' "$subject" "${node_info:-$node_note}"
   printf -- '- recent logs (%sm window from alert start):\n```\n%s\n```\n\n' "$lookback" "$err_logs"
   [ -n "${evidence_broken:-}" ] && printf '> **Evidence collection failed** — every query returned nothing, so the\n> analysis below has no live data behind it.\n\n'
@@ -554,6 +587,9 @@ printf 'ALERT: %s (%s)\nService: %s\nLikely cause: %s\nConfidence: %s\nVerdict: 
   "$alertname" "$severity" "$subject" "$(printf '%s' "$rootcause" | clip 200)" \
   "$(printf '%s' "$confidence" | clip 120)" "$(printf '%s' "$verdict" | clip 160)" "$(printf '%s' "$fault" | clip 160)" "$prev_seen" "$fm" "$related" \
   "$err_ratio" "$heap" "$lat_mode" "$(printf '%s' "$action" | clip 120)" "$ttb"
+if [ -n "$disk_trend" ]; then
+  printf 'Disk: %s\n' "$disk_trend"
+fi
 if [ -n "$degraded" ]; then
   printf 'Degraded: %s\n' "$degraded"
 fi

@@ -40,11 +40,17 @@ cat > "$TMP/ws/skills/promql-query/scripts/query.sh" <<'EOF'
 #!/usr/bin/env bash
 # Stub: emits one result object per query, or nothing when STUB_PROM_EMPTY=1
 # (which is what a real instant query returns when the target is gone).
+[ -n "${STUB_PROM_LOG:-}" ] && echo "$*" >> "$STUB_PROM_LOG"
 [ "${STUB_PROM_EMPTY:-0}" = "1" ] && exit 0
 # 0/0 over a window with no traffic: Prometheus returns a real NaN sample.
 [ "${STUB_PROM_NAN:-0}" = "1" ] && { echo '{"value":"NaN"}'; exit 0; }
 case "$2" in
   *ALERTS_FOR_STATE*) [ -n "${STUB_PENDING_AT:-}" ] && echo "{\"value\":\"$STUB_PENDING_AT\"}" ;;
+  # A root filesystem losing 120 GB a day: 530 GB free of 3500 GB now.
+  *node_filesystem_size_bytes*) echo '{"value":"3500000000000"}' ;;
+  *node_filesystem_avail_bytes*"offset 24h"*) echo '{"value":"650000000000"}' ;;
+  *node_filesystem_avail_bytes*"offset 6h"*) echo '{"value":"560000000000"}' ;;
+  *node_filesystem_avail_bytes*) echo "{\"value\":\"${STUB_DISK_AVAIL:-530000000000}\"}" ;;
   *heap*) echo '{"value":"104857600"}' ;;
   *latency_mode*) echo '{"value":"1"}' ;;
   *) echo '{"value":"1"}' ;;
@@ -481,6 +487,29 @@ curl -sf -m 2 -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$RELAY_PORT/al
 post_node_alert GPUXidCritical c1 gpu-node-7 GpuNvlinkLinkDown
 run_investigate PATH="$TMP/bin:$PATH" KUBECONFIG_DIR="$TMP/kc" STUB_NODE_HEALTHY=1
 check "condition unknown to the node -> says not reported" "alert condition GpuNvlinkLinkDown: not reported by this node" "$(cat "$TMP/last_prompt")"
+
+# 16b. A disk alert on a node gets the root filesystem's free space now and
+#      its trend, so the brief can say how fast it fills instead of only that
+#      image GC freed nothing (2026-11-03: two disk briefs on one node had no
+#      fill rate, and the cause was outside what GC can free).
+disk_line() { # disk_line <alertname>
+  jq -nc --arg n "$1" '{status:"firing", alertname:$n, severity:"warning", summary:"s", description:"d",
+    labels:{cluster:"c1", node:"gpu-node-7"}, starts_at:"2026-10-25T09:04:00Z", pager:"irm", label:"IRM", ref:"6003", url:""}'
+}
+: > "$TMP/prom.args"
+run_investigate_line "$(disk_line 'Node Disk Pressure')" PATH="$TMP/bin:$PATH" KUBECONFIG_DIR="$TMP/kc" STUB_PROM_LOG="$TMP/prom.args"
+check "disk alert -> free space and trend in the prompt" \
+  "- root filesystem /: 530 GB free of 3500 GB (15.1%); 560 GB free 6 h ago, 650 GB free 24 h ago (-120 GB in 24 h); full in about 106 h at the 24 h rate" \
+  "$(cat "$TMP/last_prompt")"
+check "disk alert -> brief has the disk line" "Disk: root filesystem /: 530 GB free of 3500 GB (15.1%)" "$OUT"
+check "disk alert -> queried by cluster, node and mountpoint" 'cluster="c1",instance="gpu-node-7",mountpoint="/"' "$(cat "$TMP/prom.args")"
+run_investigate_line "$(disk_line 'Node Disk Pressure')" PATH="$TMP/bin:$PATH" KUBECONFIG_DIR="$TMP/kc" STUB_DISK_AVAIL=700000000000
+check "disk freeing up -> no time to full" "(+50 GB in 24 h)" "$(cat "$TMP/last_prompt")"
+case "$(cat "$TMP/last_prompt")" in *"full in about"*) bad "disk freeing up -> no time to full" "prompt has one" ;; *) ok "disk freeing up -> no 'full in' line" ;; esac
+run_investigate_line "$(disk_line 'Node Disk Pressure')" PATH="$TMP/bin:$PATH" KUBECONFIG_DIR="$TMP/kc" STUB_PROM_EMPTY=1
+check "disk alert, no series -> says so" "- root filesystem /: no node-exporter series for gpu-node-7 in c1" "$(cat "$TMP/last_prompt")"
+run_investigate_line "$(disk_line 'GPU Xid Critical')" PATH="$TMP/bin:$PATH" KUBECONFIG_DIR="$TMP/kc"
+case "$(cat "$TMP/last_prompt")$OUT" in *"root filesystem"*|*"Disk:"*) bad "non-disk alert -> no disk line" "got one" ;; *) ok "non-disk alert -> no disk line" ;; esac
 
 # 17. A cluster with no read-only kubeconfig is said so, and kubectl is never
 #     run (it would fall back to whatever admin context the host has).
