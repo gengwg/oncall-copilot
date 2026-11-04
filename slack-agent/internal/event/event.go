@@ -112,6 +112,7 @@ type Record struct {
 	AckedAt      string `json:"acked_at,omitempty"`
 	AckNote      string `json:"ack_note,omitempty"`
 	DCStatus     string `json:"dc_status,omitempty"`
+	DCDetail     string `json:"dc_detail,omitempty"` // the last run's detail: draft channel, thread or existing request
 	UpdatedAt    string `json:"updated_at"`
 }
 
