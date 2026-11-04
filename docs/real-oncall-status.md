@@ -13,7 +13,7 @@ channels, IDs) stay out of this public repo. They live in the operator's
 | Service | State | Writes |
 |---|---|---|
 | Poller (`alert-relay/poll.sh`, IRM adapter, systemd timer, every 60 s) | live, shadow mode | briefs log, outbox, DC drafts |
-| Slack agent (`slack-agent/`, user service) | live, `ACK_DRY_RUN=1` | Slack DMs, "would ack" notes |
+| Slack agent (`slack-agent/`, user service) | live, acks on since 2026-11-04 18:53Z (`ACK_DRY_RUN=0`) | Slack DMs, IRM acks on the owner's shift |
 
 The poller reads Grafana IRM alert groups with a Viewer token, investigates
 each new critical or warning group once with `investigate.sh`, and writes a
@@ -110,7 +110,11 @@ the operator's admin kubeconfigs, in a sandboxed unit (`ProtectHome`,
 - **Acks are narrow, and dry run first.** Only healthy briefs with a hold
   verdict, for paging-severity alerts that fired during the owner's own shift.
   This amended the research doc's "no auto-ack" (§3, 2026-10-31 amendment).
-  Turn `ACK_DRY_RUN` off only after watching one shift handoff in dry run.
+  Dry run covered the owner's 2026-11-03 shift and its 08:00 PT handoff (13
+  briefs, all page, so no "would ack" was ever exercised). The owner turned
+  acks on at 2026-11-04 18:53Z, before the A2 formal pass on 2026-11-09, by
+  his decision. Kill switch: `ACK_DRY_RUN=1` in `agent.env` and restart the
+  agent; `unack #N` undoes one ack.
 - **The hackathon demo is retired** (2026-11-01, after the submission). Judge
   changes by their effect on the production path (`poll.sh` ->
   `investigate.sh` -> outbox -> Slack agent). The demo pieces (NemoClaw sandbox,
@@ -166,9 +170,13 @@ escalation, so check the earliest date above, not the pager.
    entry, with a WARNING when there are any: the evidence has a gap. Score
    only periods when `ACK_DRY_RUN=1` held: live copilot acks use the owner's
    personal token and show as the owner, so any live-ack period makes
-   `page-ok` too high and the false-page rate too low.
-2. **Agent dry run.** Flip `ACK_DRY_RUN=0` after one observed handoff
-   (`deploy/systemd/README.md`, Going live).
+   `page-ok` too high and the false-page rate too low. That is briefs before
+   2026-11-04 18:53Z; after it, read the agent's thread replies ("acked IRM #N:
+   your shift, brief delivered") to tell its acks from the owner's.
+2. **Live acks, audited.** Acks are on since 2026-11-04 18:53Z. Still to do
+   for A3: list each live ack next to what happened to its alert group
+   afterwards, and a week of live acks with none on an alert that needed
+   action.
 3. **False-alarm pings.** IRM pages before the copilot looks, so only an IRM
    change stops them: the warning chain holds at night and the copilot pages
    the real ones (research doc §3, Phase 4). That is a team decision.
