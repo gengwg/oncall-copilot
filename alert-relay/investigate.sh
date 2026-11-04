@@ -261,7 +261,13 @@ if [ -n "$node" ]; then
       node_cordoned=$(printf '%s' "$node_json" | jq -r '(.spec.unschedulable // false) | tostring' 2>/dev/null)
       node_gpu_fault=$(printf '%s' "$node_json" | jq -r 'any(.spec.taints[]?; .key == "aranya.tech/gpu-fault") | tostring' 2>/dev/null)
       pods=$("${k[@]}" get pods -A --field-selector "spec.nodeName=$node" -o json 2>/dev/null \
-        | jq -r '"pods on node: " + ([.items[].status.phase] | group_by(.) | map(.[0] + "=" + (length | tostring)) | join(" "))' 2>/dev/null)
+        | jq -r '"pods on node: " + ([.items[] | {p: .status.phase,
+              ds: any(.metadata.ownerReferences[]?; .kind == "DaemonSet"), ev: (.status.reason == "Evicted")}]
+            | group_by(.p) | map((map(select(.ds)) | length) as $d | (map(select(.ev)) | length) as $e
+              | .[0].p + "=" + (length | tostring)
+              + ([if $d > 0 then "\($d) DaemonSet" else empty end, if $e > 0 then "\($e) evicted" else empty end]
+                 | if length > 0 then " (" + join(", ") + ")" else "" end))
+            | join(" "))' 2>/dev/null)
       events=$("${k[@]}" get events -A --field-selector "involvedObject.kind=Node,involvedObject.name=$node" -o json 2>/dev/null \
         | jq -r '.items | sort_by(.lastTimestamp // .eventTime // "") | .[-5:][]
           | "event " + (.lastTimestamp // .eventTime // "?") + " " + .reason + ": " + ((.message // "") | .[0:160])' 2>/dev/null)
@@ -302,7 +308,7 @@ node_section=""
 # node status, and Ready says nothing about GPUs, so reading either as recovery
 # would argue a real page down.
 [ -n "$node" ] && node_section="
-- node $subject (read now; only conditions away from normal are listed. Faults the alert reads from metrics, such as NVLink or InfiniBand, do not show here, so their absence is not a sign of recovery. Ready means the kubelet is healthy, not the GPUs):
+- node $subject (read now; only conditions away from normal are listed. Faults the alert reads from metrics, such as NVLink or InfiniBand, do not show here, so their absence is not a sign of recovery. Ready means the kubelet is healthy, not the GPUs. DaemonSet pods are node agents, so customer impact is pods not owned by a DaemonSet):
 ${node_info:-$node_note}"
 
 # --- Nemotron analysis ---
