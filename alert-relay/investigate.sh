@@ -124,15 +124,30 @@ date=$(date -u +%Y-%m-%d)
 # Sanitize: alertname is an untrusted label and lands in a path. A '/' or '..'
 # would write outside $INCIDENTS.
 alert_slug=$(printf '%s' "$alertname" | tr -c 'A-Za-z0-9_-' '_')
-report="$INCIDENTS/$date-$alert_slug.md"
+# One report per alert, cluster and node per day: with one per alert per day, a
+# second node's brief overwrote the first. '@' is in neither the slug nor the
+# sanitized labels, so the name splits back unambiguously.
+report_key=""
+[ -n "$cluster$node" ] && report_key="@$cluster@$node"
+report="$INCIDENTS/$date-$alert_slug$report_key.md"
 mkdir -p "$INCIDENTS"
 
 [ "$status" != "firing" ] && return 1
 
 runbook=$(cat "$RUNBOOKS/$service.md" 2>/dev/null || echo "no runbook")
 
-# Latest earlier report for this alert, so the model can say "seen before".
-prev=$(ls "$INCIDENTS"/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-"$alert_slug".md 2>/dev/null | tail -1)
+# Reports for this subject (service, or cluster and node), oldest first.
+# Matched on the Service line, so reports named before the per-node key count.
+subject_reports() { # subject_reports <name-glob>...: names start with the date, so sort by name
+  local s
+  for s in "$@"; do ls "$INCIDENTS"/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-$s.md 2>/dev/null; done \
+    | xargs -r -d '\n' grep -lxF -- "- **Service**: $subject" 2>/dev/null \
+    | awk -F/ '{print $NF "\t" $0}' | sort | cut -f2-
+}
+
+# Latest earlier report for this alert on this subject, so the model can say
+# "seen before" without borrowing another node's cause.
+prev=$(subject_reports "$alert_slug" "$alert_slug@*" | tail -1)
 prev_seen="none on file"
 prev_cause="none"
 if [ -n "$prev" ]; then
@@ -459,13 +474,14 @@ if [ -n "$DC_DRAFT_DIR" ] && [ -n "$prov" ] && [ -n "$want_draft" ]; then
 fi
 [ -n "$hold_verdict" ] && [ -s "$dc_draft" ] && verdict="$hold_verdict"
 
-# Latest report for a different alert with the same failure mode: the same
-# kind of failure can surface under another alert name.
+# Latest report for a different alert with the same failure mode on the same
+# subject: the same kind of failure can surface under another alert name. The
+# key is dropped from the name shown, since it is this brief's own.
 related="none"
 if [ "$fm" != "other" ]; then
-  related=$(grep -lxF -- "- **Failure mode**: $fm" "$INCIDENTS"/*.md 2>/dev/null | while read -r f; do
+  related=$(subject_reports '*' | xargs -r -d '\n' grep -lxF -- "- **Failure mode**: $fm" 2>/dev/null | while read -r f; do
     b=$(basename "$f" .md)
-    case "$b" in ????-??-??-"$alert_slug") ;; *) echo "$b" ;; esac
+    case "$b" in ????-??-??-"$alert_slug"|????-??-??-"$alert_slug"@*) ;; *) echo "${b%%@*}" ;; esac
   done | tail -1)
   [ -z "$related" ] && related="none"
 fi
