@@ -979,3 +979,49 @@ func TestFileAgainWithAlertReference(t *testing.T) {
 		t.Fatalf("calls=%v reply=%q", h.runner.calls, h.poster.lastReply())
 	}
 }
+
+// A bare alert link or number as a new message attaches the alert to that
+// thread, so `ack` and `file` work there (2026-11-03: a pasted alert link got
+// the help text, then "No alert is attached" on `ack` and `file`).
+func TestBareAlertLinkAttaches(t *testing.T) {
+	h := newHarness(t, theirShift)
+	h.a.DryRun = true
+	var g irm.Group
+	g.ID, g.Number, g.State = "X9", 5474, "firing"
+	g.LastAlert.Payload.Alerts = append(g.LastAlert.Payload.Alerts, struct {
+		Labels   map[string]string `json:"labels"`
+		StartsAt string            `json:"startsAt"`
+	}{Labels: map[string]string{"alertname": "GPU Xid Critical", "cluster": "c1", "node": "n1"}})
+	link := "https://aranyaglobal.slack.com/archives/C0A9WCF9S56/p1761900000000001"
+	h.irm.findable = map[string]irm.Group{"#5474": g, link: g}
+	ctx := context.Background()
+
+	h.a.HandleInbound(ctx, slackio.Inbound{TS: "u1", Text: "<" + link + ">"})
+	r := h.poster.lastReply()
+	if !strings.HasPrefix(r, "u1: Attached IRM #5474 GPU Xid Critical c1/n1.") {
+		t.Fatalf("reply: %q", r)
+	}
+	h.a.HandleInbound(ctx, slackio.Inbound{ThreadTS: "u1", Text: "ack"})
+	if r := h.poster.lastReply(); r != "u1: Dry run: would ack on your instruction." {
+		t.Fatalf("ack in the attached thread: %q", r)
+	}
+
+	// Already attached elsewhere: point back to that thread, which keeps working.
+	h.a.HandleInbound(ctx, slackio.Inbound{TS: "u2", Text: "#5474"})
+	if r := h.poster.lastReply(); !strings.HasPrefix(r, "u2: IRM #5474 GPU Xid Critical c1/n1 already has a thread here") {
+		t.Fatalf("bare number, already attached: %q", r)
+	}
+	// A bare number for an alert not seen before attaches it.
+	g2 := g
+	g2.ID, g2.Number = "X10", 5475
+	h.irm.findable["#5475"] = g2
+	h.a.HandleInbound(ctx, slackio.Inbound{TS: "u4", Text: "#5475"})
+	if r := h.poster.lastReply(); !strings.HasPrefix(r, "u4: Attached IRM #5475") {
+		t.Fatalf("bare number: %q", r)
+	}
+	// Ordinary words still get the help text, not an alert lookup.
+	h.a.HandleInbound(ctx, slackio.Inbound{TS: "u3", Text: "hello"})
+	if r := h.poster.lastReply(); !strings.Contains(r, "Reply in a brief's thread") {
+		t.Fatalf("plain text: %q", r)
+	}
+}

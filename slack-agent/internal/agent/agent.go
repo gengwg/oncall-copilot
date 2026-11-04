@@ -584,7 +584,7 @@ func deref(s *string) string {
 
 // --- Replies from the owner.
 
-const help = "Reply in a brief's thread with `file` (draft the DC request now; `file again` to repeat a fresh check), `sent` (you sent the draft), `ignore` (never for this node for 14 days), `ack`, `unack`; or send `file #5474` / `file <alert link>` (also `sent`, `ack`, `unack`, `ignore`) as a new message for any alert; `status` anywhere."
+const help = "Reply in a brief's thread with `file` (draft the DC request now; `file again` to repeat a fresh check), `sent` (you sent the draft), `ignore` (never for this node for 14 days), `ack`, `unack`; or send `file #5474` / `file <alert link>` (also `sent`, `ack`, `unack`, `ignore`, or the bare link to attach it) as a new message for any alert; `status` anywhere."
 
 // slackLink strips Slack's <url|label> wrapping from a pasted link.
 var slackLink = regexp.MustCompile(`<([^|>]+)(?:\|[^>]*)?>`)
@@ -595,6 +595,10 @@ func (a *Agent) HandleInbound(ctx context.Context, in slackio.Inbound) {
 	cmd, ref, _ := strings.Cut(text, " ")
 	cmd = strings.ToLower(cmd)
 	ref = strings.TrimSpace(ref)
+	// A bare alert link or number, with no command, attaches that alert here.
+	if in.ThreadTS == "" && ref == "" && (strings.HasPrefix(cmd, "http") || (strings.HasPrefix(cmd, "#") && len(cmd) > 1)) {
+		cmd, ref = "attach", text
+	}
 	again := false
 	if cmd == "file" {
 		if rest, ok := strings.CutPrefix(strings.ToLower(ref), "again"); ok && (rest == "" || rest[0] == ' ') {
@@ -614,7 +618,7 @@ func (a *Agent) HandleInbound(ctx context.Context, in slackio.Inbound) {
 	threadTS := in.ThreadTS
 	var rec *event.Record
 	switch {
-	case threadTS == "" && ref != "" && (cmd == "file" || cmd == "sent" || cmd == "ignore" || cmd == "ack" || cmd == "unack"):
+	case threadTS == "" && ref != "" && (cmd == "attach" || cmd == "file" || cmd == "sent" || cmd == "ignore" || cmd == "ack" || cmd == "unack"):
 		// A command about any alert: attach the group to this message's thread.
 		al, err := a.Pager.Find(ctx, ref)
 		if err != nil {
@@ -724,6 +728,16 @@ func (a *Agent) HandleInbound(ctx context.Context, in slackio.Inbound) {
 		rec.AckNote = "unacked on your instruction"
 		save(rec)
 		reply(in.ThreadTS, fmt.Sprintf("Unacked %s #%s; it escalates again.", a.label(), ev.Ref))
+	case "attach":
+		// Thread commands find a record by its one thread, so an alert that
+		// already has one (usually its brief) is pointed back there.
+		if rec.SlackTS != in.ThreadTS {
+			reply(in.ThreadTS, fmt.Sprintf("%s #%s %s %s/%s already has a thread here (its brief); reply there, or send `ack #%s` / `file #%s` as a new message.",
+				a.label(), ev.Ref, ev.Alertname, orDash(ev.Cluster), orDash(ev.Node), ev.Ref, ev.Ref))
+			return
+		}
+		reply(in.ThreadTS, fmt.Sprintf("Attached %s #%s %s %s/%s. Reply here with `file`, `sent`, `ignore`, `ack` or `unack`.",
+			a.label(), ev.Ref, ev.Alertname, orDash(ev.Cluster), orDash(ev.Node)))
 	case "status":
 		reply(in.ThreadTS, a.status(ctx))
 	default:
