@@ -85,7 +85,7 @@ case "$*" in
 JSON
   ;;
   *" get events "*) echo '{"items":[{"lastTimestamp":"2026-10-25T03:01:00Z","reason":"NodeNotSchedulable","message":"Node gpu-node-7 status is now: NodeNotSchedulable"}]}' ;;
-  *" get pods "*) echo '{"items":[{"status":{"phase":"Running"}},{"status":{"phase":"Running"}},{"status":{"phase":"Failed"}}]}' ;;
+  *" get pods "*) echo '{"items":[{"status":{"phase":"Running"}},{"metadata":{"ownerReferences":[{"kind":"DaemonSet"}]},"status":{"phase":"Running"}},{"metadata":{"ownerReferences":[{"kind":"DaemonSet"}]},"status":{"phase":"Failed","reason":"Evicted"}}]}' ;;
 esac
 EOF
 chmod +x "$TMP/bin/kubectl"
@@ -414,7 +414,10 @@ prompt=$(cat "$TMP/last_prompt")
 check "node alert -> brief names cluster/node, not demo-app" "Service: c1/gpu-node-7" "$OUT"
 check "node alert -> prompt has the abnormal condition" "condition XidCritical=True: NVRM: Xid (PCI:0000:1b:00): 79" "$prompt"
 check "node alert -> prompt has the cordon state" "cordoned: true" "$prompt"
-check "node alert -> prompt has pod phases" "pods on node: Failed=1 Running=2" "$prompt"
+# Evictions of node agents are not customer impact: say which pods are
+# DaemonSet-owned and which were evicted (2026-11-03: 91 evicted DaemonSet pods
+# briefed as "pods at imminent eviction risk").
+check "node alert -> pods split by DaemonSet and eviction" "pods on node: Failed=1 (1 DaemonSet, 1 evicted) Running=2 (1 DaemonSet)" "$prompt"
 check "node alert -> prompt has node events" "NodeNotSchedulable: Node gpu-node-7" "$prompt"
 check "node alert -> prompt has the rule description" "A GPU reported Xid 79 and is off the bus" "$prompt"
 check "node alert -> prompt keeps metric faults from reading as recovered" "their absence is not a sign of recovery" "$prompt"
