@@ -29,6 +29,12 @@ import (
 const shiftRefresh = time.Hour
 
 func main() {
+	// For the deploy check: the OpenCode agent the fallback runs under, to
+	// resolve with `opencode debug agent dc-draft` on the host.
+	if len(os.Args) == 2 && os.Args[1] == "-opencode-agent" {
+		os.Stdout.WriteString(dcrequest.OpenCodeAgent + "\n")
+		return
+	}
 	lg := log.New(os.Stderr, "", log.LstdFlags|log.LUTC)
 	cfg, err := config.Load(os.Getenv)
 	if err != nil {
@@ -51,10 +57,17 @@ func main() {
 	if err != nil {
 		lg.Fatalf("slack: %v", err)
 	}
+	var fallback dcrequest.Runner
+	if cfg.OpenCodeBin != "" {
+		fallback = dcrequest.OpenCodeRunner{Bin: cfg.OpenCodeBin, Dir: cfg.MetarepoDir, Model: cfg.OpenCodeModel, Timeout: 10 * time.Minute}
+	}
 	a := &agent.Agent{
 		Outbox: cfg.OutboxDir, Store: store, Poster: slk, Pager: irmc, PagerName: cfg.Pager, Shifts: shifts,
 		Ledger: ledger.New(filepath.Join(cfg.AgentStateDir, "dc-requests.tsv")),
-		Runner: dcrequest.ExecRunner{Bin: cfg.ClaudeBin, Dir: cfg.MetarepoDir, Model: cfg.ClaudeModel, Timeout: 10 * time.Minute},
+		Runner: dcrequest.FallbackRunner{
+			Primary:  dcrequest.ExecRunner{Bin: cfg.ClaudeBin, Dir: cfg.MetarepoDir, Model: cfg.ClaudeModel, Timeout: 10 * time.Minute},
+			Fallback: fallback,
+		},
 		DryRun: cfg.AckDryRun, CollapseMax: cfg.CollapseMax, Log: lg,
 		DigestAt: cfg.DigestAt, DigestMarker: filepath.Join(cfg.AgentStateDir, "digest-last"),
 		Notes: notes.Store{Dir: cfg.NotesDir},
@@ -99,7 +112,7 @@ func main() {
 		}
 	}()
 
-	lg.Printf("started: outbox %s, dry run %v, every %s, heartbeat %v, off-shift digest at %q %s", cfg.OutboxDir, cfg.AckDryRun, cfg.ScanInterval, cfg.HeartbeatURL != "", cfg.DigestAt, cfg.DigestTZ)
+	lg.Printf("started: outbox %s, dry run %v, every %s, heartbeat %v, off-shift digest at %q %s, OpenCode fallback %v", cfg.OutboxDir, cfg.AckDryRun, cfg.ScanInterval, cfg.HeartbeatURL != "", cfg.DigestAt, cfg.DigestTZ, cfg.OpenCodeBin != "")
 	// Pinged only after a scan that read the outbox, so IRM alerts when the
 	// agent dies, loses the outbox, or stalls. The URL carries a secret: never logged.
 	var failedPings, skippedPings atomic.Int64

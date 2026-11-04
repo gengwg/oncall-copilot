@@ -30,6 +30,10 @@ type Config struct {
 	ClaudeBin      string
 	ClaudeModel    string
 	MetarepoDir    string
+	// OpenCode runs the DC skill only when Claude Code is at its spend limit;
+	// "" turns that off. OpenCodeModel is provider/model, "" its default.
+	OpenCodeBin   string
+	OpenCodeModel string
 
 	AckDryRun    bool
 	CollapseMax  int
@@ -80,6 +84,8 @@ func Load(getenv func(string) string) (Config, error) {
 		ClaudeBin:        opt("CLAUDE_BIN", "claude"),
 		ClaudeModel:      opt("CLAUDE_MODEL", ""),
 		MetarepoDir:      req("METAREPO_DIR"),
+		OpenCodeBin:      opt("OPENCODE_BIN", ""),
+		OpenCodeModel:    opt("OPENCODE_MODEL", ""),
 		AckDryRun:        opt("ACK_DRY_RUN", "1") != "0",
 		HeartbeatURL:     opt("HEARTBEAT_URL", ""),
 		DigestAt:         opt("DIGEST_AT", "08:05"),

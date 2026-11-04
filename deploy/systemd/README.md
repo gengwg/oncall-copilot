@@ -88,6 +88,32 @@ Create it from a manifest: bot scopes `chat:write`, `im:history`, `im:write`,
 `messages_tab_read_only_enabled: false`, otherwise the DM refuses input. Install
 it to the workspace to get the bot token.
 
+## OpenCode fallback for DC drafts
+
+When Claude Code is at its weekly spend limit, every DC run fails at $0. With
+`OPENCODE_BIN` set in `agent.env`, the agent then runs the same skill and
+prompt once through `opencode run`, and only after that failure; any other
+Claude failure stands. The thread says when OpenCode drafted. It is off until
+OpenCode on the host has, as the owner:
+
+1. a model it can call (`OPENCODE_MODEL`, or OpenCode's default);
+2. Slack's MCP server, authorized as the owner's own Slack user (an internal
+   Slack app with user token scopes, PKCE and the MCP server feature enabled),
+   since drafts must land in the owner's compose box;
+3. the metarepo's skills, which OpenCode reads from `.claude/skills`.
+
+The agent sets its own OpenCode agent, `dc-draft`, through
+`OPENCODE_CONFIG_CONTENT`: deny everything first, then allow read, look and
+the Slack draft, with the same kubectl deny list as the Claude run. OpenCode
+appends it after its defaults and the host's config, and the last matching
+rule wins. Check that on the host before turning it on; the tail of the list
+must start with `["*","*","deny"]` and nothing after it may allow a send:
+
+```sh
+cd ~/Aranya/metarepo && OPENCODE_CONFIG_CONTENT="$(~/.local/bin/oncall-slack-agent -opencode-agent)" \
+  opencode debug agent dc-draft | jq -c '.permission[] | [.permission, .pattern, .action]' | tail -40
+```
+
 ## IRM token
 
 Acknowledging needs a user token, not a service account: IRM > Settings >

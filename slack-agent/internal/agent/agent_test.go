@@ -385,6 +385,22 @@ func TestDCFailureAndAlreadySent(t *testing.T) {
 	}
 }
 
+func TestDCDraftByTheFallbackSaysSo(t *testing.T) {
+	h := newHarness(t, myShift)
+	h.runner.res = dcrequest.Result{Status: dcrequest.Drafted, Detail: "#ext-x", CostUSD: 0.2, Via: "OpenCode"}
+	h.put(withDraft(ev("G1", 1, "critical", now)))
+	h.tick()
+	if r, reply := h.rec("G1"), h.poster.lastReply(); r.DCStatus != "drafted" || !strings.Contains(reply, "spend limit, so OpenCode ran the skill") {
+		t.Fatalf("rec=%+v reply=%q", r, reply)
+	}
+	h.runner.res = dcrequest.Result{Status: dcrequest.Failed, Detail: "weekly limit; OpenCode fallback: no Slack MCP", Via: "OpenCode"}
+	h.a.HandleInbound(context.Background(), slackio.Inbound{ThreadTS: "ts1", Text: "file again"})
+	h.a.DrainDC(context.Background())
+	if reply := h.poster.lastReply(); !strings.Contains(reply, "OpenCode fallback: no Slack MCP") || strings.Contains(reply, "ran the skill") {
+		t.Fatalf("a failed fallback reads as a failure with both reasons: %q", reply)
+	}
+}
+
 func TestDCFollowupDrafted(t *testing.T) {
 	h := newHarness(t, myShift)
 	h.runner.res = dcrequest.Result{Status: dcrequest.FollowupDrafted, Detail: "https://slack/thread-1"}

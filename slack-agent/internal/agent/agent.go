@@ -544,7 +544,10 @@ func (a *Agent) runDC(ctx context.Context, j dcJob) error {
 	if res.CostUSD > 0 {
 		msg += fmt.Sprintf(" (run cost $%.2f)", res.CostUSD)
 	}
-	a.logf("dc %s: %s, cost $%.2f", ev.ID, status, res.CostUSD)
+	if res.Via != "" && res.Status != dcrequest.Failed {
+		msg += " Claude Code was at its spend limit, so " + res.Via + " ran the skill."
+	}
+	a.logf("dc %s: %s, cost $%.2f%s", ev.ID, status, res.CostUSD, viaNote(res.Via))
 	if err := a.Ledger.Append(ledger.Entry{TS: now, Cluster: ev.Cluster, Node: ev.Node, ID: ev.ID, Status: status}); err != nil {
 		a.logf("dc %s: ledger write failed, the next alert on %s may draft again: %v", ev.ID, ev.Node, err)
 	}
@@ -553,6 +556,13 @@ func (a *Agent) runDC(ctx context.Context, j dcJob) error {
 		return err
 	}
 	return a.Poster.Reply(ctx, rec.SlackTS, msg)
+}
+
+func viaNote(via string) string {
+	if via == "" {
+		return ""
+	}
+	return ", via " + via
 }
 
 // freshAlreadySent reports the skill's own finding from the last day that a
