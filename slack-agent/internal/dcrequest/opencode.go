@@ -78,10 +78,12 @@ const OpenCodeAgent = `{"agent":{"dc-draft":{"mode":"primary",` +
 	`"*slack_send_message_draft":"allow",` +
 	`"*query_prometheus":"allow","*get_alert_group":"allow"}}}}`
 
-// OpenCodeArgs is the fixed flag set.
-// No --auto: nothing is approved that the agent's rules do not allow.
+// OpenCodeArgs is the fixed flag set (OpenCode 2). No --auto: nothing is
+// approved that the agent's rules do not allow. --standalone: without it the
+// run goes to the host's background service, which never sees
+// OPENCODE_CONFIG_CONTENT and so has no dc-draft agent.
 func OpenCodeArgs(prompt, model string) []string {
-	a := []string{"run", "--format", "json", "--agent", "dc-draft"}
+	a := []string{"run", "--standalone", "--format", "json", "--agent", "dc-draft"}
 	if model != "" {
 		a = append(a, "--model", model)
 	}
