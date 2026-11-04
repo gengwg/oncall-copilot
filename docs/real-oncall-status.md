@@ -50,6 +50,12 @@ the operator's admin kubeconfigs, in a sandboxed unit (`ProtectHome`,
 - **Facts the model must not infer are computed in code.** Live replays showed
   the model trusts the alert's wording over a condition missing from the
   evidence, so the alert condition's state and timing are stated outright.
+- **"Previous" is the same alert on the same node.** Incident reports are
+  named `<date>-<alert>@<cluster>@<node>.md`, and the previous incident and
+  the related one are looked up by the report's Service line, so reports from
+  before the change still match. With one report per alert per day, a later
+  node's brief overwrote an earlier one's and the next brief quoted another
+  node's cause (2026-11-04).
 - **Heartbeats go to a quiet channel with no escalation**, as the deploy
   README recommends, so a dead shadow service is visible but wakes nobody. The
   poller skips the ping on any failed poll and holds it after two degraded

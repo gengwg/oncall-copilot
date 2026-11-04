@@ -246,7 +246,7 @@ check "no verdict -> defaults to page" "Verdict: page - no verdict given, defaul
 
 # 2b. A repeat alert feeds the last report's root cause to the model.
 mkdir -p "$TMP/ws/memory/incidents"
-printf '# DemoHighLatency\n\n## Root cause\nInjected latency chaos, cleared at 23:29Z.\n\n## Evidence\n- up: 1\n' \
+printf '# DemoHighLatency\n\n- **Service**: demo-app\n\n## Root cause\nInjected latency chaos, cleared at 23:29Z.\n\n## Evidence\n- up: 1\n' \
   > "$TMP/ws/memory/incidents/2026-10-10-DemoHighLatency.md"
 post_alert DemoHighLatency
 run_investigate
@@ -449,7 +449,7 @@ case "$ERR" in
   *"no evidence collected"*) bad "node evidence counts as evidence" "warned although node evidence was collected" ;;
   *) ok "node evidence counts as evidence" ;;
 esac
-report=$(cat "$TMP/ws/memory/incidents/$(date -u +%Y-%m-%d)-GPUXidCritical.md")
+report=$(cat "$TMP/ws/memory/incidents/$(date -u +%Y-%m-%d)-GPUXidCritical@c1@gpu-node-7.md")
 check "node alert -> report has node evidence" "cordoned: true" "$report"
 case "$prompt" in
   *"abnormal conditions now: none"*) bad "faulted node -> no 'none' line" "claims no abnormal conditions while XidCritical=True" ;;
@@ -565,6 +565,46 @@ case "$(cat "$TMP/last_prompt")" in
   *re-notification*) bad "fresh alert -> no re-notification note" "prompt has one" ;;
   *) ok "fresh alert -> no re-notification note" ;;
 esac
+
+# 18c. Previous is the same alert on the same node. One report per alert per
+#      day let a later node's brief overwrite an earlier one's, and the next
+#      brief quoted another node's cause as "previous" (2026-11-04: an NVLink
+#      brief carried "~58 days uptime" from a different node). Reports written
+#      before this change are matched by their Service line.
+NODE_ENV=(PATH="$TMP/bin:$PATH" KUBECONFIG_DIR="$TMP/kc")
+nl_line() { # nl_line <node> [alertname]
+  jq -nc --arg node "$1" --arg n "${2:-GPU NVLink Link Down}" '{status:"firing", alertname:$n, severity:"warning",
+    summary:"s", description:"d", labels:{cluster:"c1", node:$node}, starts_at:"2026-10-25T09:04:00Z",
+    pager:"irm", label:"IRM", ref:"6001", url:""}'
+}
+printf '# GPU NVLink Link Down\n\n- **Service**: c1/gpu-node-7\n\n## Root cause\nvBIOS defect on gpu-node-7.\n\n' \
+  > "$TMP/ws/memory/incidents/2026-10-20-GPU_NVLink_Link_Down.md"
+printf '# GPU NVLink Link Down\n\n- **Service**: c1/gpu-node-8\n\n## Root cause\nCable fault on gpu-node-8.\n\n' \
+  > "$TMP/ws/memory/incidents/2026-10-22-GPU_NVLink_Link_Down.md"
+run_investigate_line "$(nl_line gpu-node-7)" "${NODE_ENV[@]}"
+check "same node, old report -> previous found" "Previous: 2026-10-20" "$OUT"
+check "same node, old report -> its cause in the prompt" "vBIOS defect on gpu-node-7." "$(cat "$TMP/last_prompt")"
+case "$(cat "$TMP/last_prompt")" in
+  *gpu-node-8*) bad "other node's report -> not previous" "prompt quotes gpu-node-8" ;;
+  *) ok "other node's report -> not previous" ;;
+esac
+today=$(date -u +%Y-%m-%d)
+if [ -f "$TMP/ws/memory/incidents/$today-GPU_NVLink_Link_Down@c1@gpu-node-7.md" ]; then
+  ok "node alert -> report named by cluster and node"
+else
+  bad "node alert -> report named by cluster and node" "$(ls "$TMP/ws/memory/incidents")"
+fi
+touch "$TMP/last_prompt.hwpage"
+run_investigate_line "$(nl_line gpu-node-9)" "${NODE_ENV[@]}"
+check "new node, other nodes on file -> no previous" "Previous: none on file" "$OUT"
+run_investigate_line "$(nl_line gpu-node-7)" "${NODE_ENV[@]}"
+check "same node again -> today's report is previous" "Previous: $today" "$OUT"
+# Related is another alert with the same failure mode on the same node.
+run_investigate_line "$(nl_line gpu-node-7 'GPU Xid Critical')" "${NODE_ENV[@]}"
+check "related -> same node's other alert" "(related: $today-GPU_NVLink_Link_Down)" "$OUT"
+run_investigate_line "$(nl_line gpu-node-11 'GPU Xid Critical')" "${NODE_ENV[@]}"
+rm -f "$TMP/last_prompt.hwpage"
+check "related -> nothing from other nodes" "Failure mode: hardware (related: none)" "$OUT"
 
 # 19. A real hardware fault (verdict page, failure mode hardware/fabric) on a
 #     cluster with a DC provider gets a pre-filled request in the house format.
