@@ -10,6 +10,7 @@
 # On success it exits 0 and prints JSONL, oldest first, one object per group:
 #   {"id":"<provider id>","ref":"<human number, string>","url":"<link or empty>",
 #    "state":"firing|acknowledged|resolved|silenced","severity":"<group severity>",
+#    "paged_at":"<when the pager paged, RFC3339, or empty>",
 #    "alert":{"alertname":..,"severity":..,"summary":..,"description":..,
 #             "labels":{..},"starts_at":".."}}
 # alert.labels already has customer removed. On a failed fetch it prints one
@@ -196,7 +197,7 @@ for g in "${groups[@]}"; do
   # name the node in a Hostname label; read it as node here, once, so dedup,
   # node evidence, the contained-Xid hold and the outbox all see it.
   line=$(printf '%s' "$g" | jq -c --arg pager "$ONCALL_PAGER" --arg label "$LABEL" \
-    '{status: "firing"} + .alert + {pager: $pager, label: $label, ref, url}
+    '{status: "firing"} + .alert + {pager: $pager, label: $label, ref, url, paged_at: (.paged_at // "")}
      | if (.labels | type) == "object" and (.labels.node // "") == "" and (.labels.Hostname // "") != ""
        then .labels.node = .labels.Hostname else . end')
   # Two different checks. The same alert on the same node is one problem. The

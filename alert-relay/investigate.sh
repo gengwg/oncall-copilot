@@ -153,6 +153,19 @@ if [ -n "$starts_at" ]; then
   [ "$lookback" -gt 60 ] && lookback=60
   [ "$lookback" -lt 5 ] && lookback=5
 fi
+# When the pager paged, if the poller knows: a rule can fire for days before
+# its page, so time to brief counts from here and the alert's age is its own fact.
+paged_at=$(printf '%s' "$alert_json" | jq -r '.paged_at // empty')
+paged_s=0
+[ -n "$paged_at" ] && paged_s=$(date -d "$paged_at" +%s 2>/dev/null || echo 0)
+age_note=""
+if [ "$start_s" -gt 0 ]; then
+  age_ref=$paged_s; [ "$age_ref" -gt 0 ] || age_ref=$(date +%s)
+  if [ $(( age_ref - start_s )) -ge 86400 ]; then
+    age_note="
+ALERT AGE: firing since $starts_at, $(( (age_ref - start_s) / 3600 )) hours before this page. This page is a re-notification of a standing condition: judge it by what changed since it began (spread to more GPUs or nodes, counters rising, customer workloads affected), not by the condition alone."
+  fi
+fi
 
 # When the rule's condition first held, before its `for:` wait: the closest
 # signal we have to when the failure began.
@@ -296,7 +309,7 @@ ${node_info:-$node_note}"
 prompt="You are an SRE analyzing a live alert. Given the alert, live evidence, and web context, write a 2-sentence root-cause assessment, up to 2 other plausible causes the evidence rules out, and 1 suggested first action. Be specific; use the numbers. If the previous incident had the same cause, say so.
 
 ALERT: $alertname ($severity) on $subject — $summary${description:+
-RULE DESCRIPTION: $description}
+RULE DESCRIPTION: $description}$age_note
 
 LIVE EVIDENCE:
 - up: $up
@@ -458,6 +471,13 @@ hms() { if [ "$1" -gt 0 ]; then date -u -d "@$1" +%H:%M:%SZ; else echo n/a; fi; 
 ttb="n/a"
 [ "$start_s" -gt 0 ] && ttb="$(( now_s - start_s ))s"
 ttb="$ttb after the alert fired"
+if [ "$paged_s" -gt 0 ]; then
+  if [ "$start_s" -gt 0 ] && [ $(( now_s - start_s )) -ge 3600 ]; then
+    ttb="$(( now_s - paged_s ))s after the page; the alert has been firing since $starts_at ($(( (now_s - start_s) / 3600 ))h)"
+  else
+    ttb="$(( now_s - paged_s ))s after the page, $ttb"
+  fi
+fi
 [ "$pending_s" -gt 0 ] && ttb="$ttb, $(( now_s - pending_s ))s after the condition began"
 
 # --- incident report ---

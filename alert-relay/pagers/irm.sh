@@ -31,7 +31,7 @@ jq -c '(.results | if type == "array" then reverse else error("no results") end)
   | try (
       ((.last_alert.payload.alerts // []) | (map(select(.status == "firing")) | first) // .[0]) as $a
       | {id, ref: (.alert_group_number | tostring),
-         url: (.permalinks.slack // .permalinks.web // ""), state,
+         url: (.permalinks.slack // .permalinks.web // ""), state, paged_at: (.created_at // ""),
          severity: (.last_alert.payload.commonLabels.severity // .last_alert.payload.alerts[0].labels.severity // ""),
          alert: {alertname: ($a.labels.alertname // "Unknown"),
                  severity: ($a.labels.severity // "warning"),

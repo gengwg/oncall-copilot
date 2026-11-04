@@ -249,7 +249,7 @@ run_poll STATE_DIR="$SNAP" OUTBOX_DIR="$OB13"
 set_groups "$(group S1 501 firing SnapX c30 critical gpu-9)" "$(group S0 500 resolved SnapOld c30 warning)"
 : > "$TMP/investigated"
 run_poll STATE_DIR="$SNAP" OUTBOX_DIR="$OB13"
-want_line='{"status":"firing","alertname":"SnapX","severity":"critical","summary":"summary SnapX","description":"description SnapX","labels":{"alertname":"SnapX","cluster":"c30","node":"gpu-9","severity":"critical","condition":"GpuXidCritical"},"starts_at":"2026-10-25T09:04:00Z","pager":"irm","label":"IRM","ref":"501","url":"https://slack.example/archives/C1/p501"}'
+want_line='{"status":"firing","alertname":"SnapX","severity":"critical","summary":"summary SnapX","description":"description SnapX","labels":{"alertname":"SnapX","cluster":"c30","node":"gpu-9","severity":"critical","condition":"GpuXidCritical"},"starts_at":"2026-10-25T09:04:00Z","pager":"irm","label":"IRM","ref":"501","url":"https://slack.example/archives/C1/p501","paged_at":"2026-10-25T09:04:00Z"}'
 got_line=$(tail -n 1 "$TMP/investigated" | jq -S . 2>&1)
 [ "$got_line" = "$(jq -S . <<< "$want_line")" ] && ok "snapshot -> investigated line" || bad "snapshot -> investigated line" "got: $got_line"
 want_ev='{"pager":"irm","id":"S1","ref":"501","url":"https://slack.example/archives/C1/p501","irm_id":"S1","irm_number":501,"irm_url":"https://slack.example/archives/C1/p501","alertname":"SnapX","severity":"critical","cluster":"c30","node":"gpu-9","starts_at":"2026-10-25T09:04:00Z","fault":"unknown","verdict":"unknown","failure_mode":"unknown","degraded":null,"dc_draft":null}'

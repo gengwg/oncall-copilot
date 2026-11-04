@@ -22,13 +22,15 @@ environment (for `irm`: `IRM_API_URL`, `GRAFANA_URL`, `GRAFANA_TOKEN`). It print
 JSONL on stdout, oldest first, one object per alert group:
 
 ```
-{"id": "...", "ref": "...", "url": "...", "state": "...", "severity": "...",
+{"id": "...", "ref": "...", "url": "...", "state": "...", "severity": "...", "paged_at": "...",
  "alert": {"alertname": "...", "severity": "...", "summary": "...",
            "description": "...", "labels": {}, "starts_at": "..."}}
 ```
 
 - `id` is the provider's key and the dedupe key. `ref` is the human number as a
   string. `url` may be empty. `state` is `firing`, `acknowledged`, `resolved` or `silenced`.
+- `paged_at` is when the provider paged (RFC3339), or empty if unknown. The brief
+  counts its time to brief from it.
 - `severity` is the group's severity, which `poll.sh` filters on (`SEVERITIES`).
   `alert` describes the firing alert.
 - `alert.labels` must already have the `customer` label removed.
