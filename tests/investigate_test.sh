@@ -606,6 +606,28 @@ run_investigate_line "$(nl_line gpu-node-11 'GPU Xid Critical')" "${NODE_ENV[@]}
 rm -f "$TMP/last_prompt.hwpage"
 check "related -> nothing from other nodes" "Failure mode: hardware (related: none)" "$OUT"
 
+# 18d. The owner's notes on a node (the Slack agent's `note` reply) reach the
+#      prompt and the report, and the brief says they were used. Notes on
+#      other nodes do not (2026-11-04: the owner found the disk filler on the
+#      host, and the next disk brief on that node still suggested image GC).
+mkdir -p "$TMP/notes"
+printf '2026-11-04T02:00:00Z\tIRM #5611\tNode Disk Pressure\tstargz snapshotter store at /mnt/local fills /; image GC cannot see it\n' \
+  > "$TMP/notes/c1@gpu-node-7.tsv"
+printf '2026-11-04T03:00:00Z\tIRM #9\tx\tnote for another node\n' > "$TMP/notes/c1@gpu-node-8.tsv"
+notes_line() { # notes_line <node>
+  jq -nc --arg node "$1" '{status:"firing", alertname:"Node Disk Pressure", severity:"warning", summary:"s", description:"d",
+    labels:{cluster:"c1", node:$node}, starts_at:"2026-10-25T09:04:00Z", pager:"irm", label:"IRM", ref:"6002", url:""}'
+}
+run_investigate_line "$(notes_line gpu-node-7)" PATH="$TMP/bin:$PATH" KUBECONFIG_DIR="$TMP/kc" NOTES_DIR="$TMP/notes"
+prompt=$(cat "$TMP/last_prompt")
+check "owner note -> in the prompt" "OWNER NOTES FOR THIS NODE" "$prompt"
+check "owner note -> its text and where it came from" "- 2026-11-04, on IRM #5611 Node Disk Pressure: stargz snapshotter store at /mnt/local fills /" "$prompt"
+case "$prompt" in *"another node"*) bad "owner note -> other nodes' notes left out" "prompt has gpu-node-8's note" ;; *) ok "owner note -> other nodes' notes left out" ;; esac
+check "owner note -> brief says so" "Owner notes: 1 on file, latest 2026-11-04" "$OUT"
+check "owner note -> in the report" "## Owner notes" "$(cat "$TMP/ws/memory/incidents/$(date -u +%Y-%m-%d)-Node_Disk_Pressure@c1@gpu-node-7.md")"
+run_investigate_line "$(notes_line gpu-node-9)" PATH="$TMP/bin:$PATH" KUBECONFIG_DIR="$TMP/kc" NOTES_DIR="$TMP/notes"
+case "$(cat "$TMP/last_prompt")$OUT" in *"OWNER NOTES"*|*"Owner notes"*) bad "no notes -> no notes section" "got one" ;; *) ok "no notes -> no notes section" ;; esac
+
 # 19. A real hardware fault (verdict page, failure mode hardware/fabric) on a
 #     cluster with a DC provider gets a pre-filled request in the house format.
 #     It names what is still missing, so it cannot pass for ready to send.

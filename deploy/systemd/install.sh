@@ -21,6 +21,9 @@ sudo -H -u "$U" ln -sfn "$H/oncall-copilot/skills" "$H/ws/skills"
 # account) reads one event per brief. Group-readable, never writable by it.
 AGENT_USER="${AGENT_USER:-${SUDO_USER:-$USER}}"
 sudo install -d -m 750 -o "$U" -g "$U" "$H/outbox"
+# The other way round for the owner's per-node notes (the agent's `note`
+# reply): the agent writes through the group, the poller reads.
+sudo install -d -m 2770 -o "$U" -g "$U" "$H/notes"
 id -nG "$AGENT_USER" | tr ' ' '\n' | grep -qx "$U" || sudo usermod -aG "$U" "$AGENT_USER"
 
 # The Slack agent's digest reads health.log and last-ok in the poller's state dir.

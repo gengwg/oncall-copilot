@@ -26,6 +26,7 @@ type Config struct {
 	OutboxDir      string
 	AgentStateDir  string
 	PollerStateDir string // alert-relay poller's state dir; its health files feed the digest
+	NotesDir       string // the owner's per-node notes, read by the poller; created by its installer
 	ClaudeBin      string
 	ClaudeModel    string
 	MetarepoDir    string
@@ -75,6 +76,7 @@ func Load(getenv func(string) string) (Config, error) {
 		OutboxDir:        req("OUTBOX_DIR"),
 		AgentStateDir:    opt("AGENT_STATE_DIR", filepath.Join(home, ".local", "state", "oncall-slack-agent")),
 		PollerStateDir:   opt("POLLER_STATE_DIR", "/var/lib/oncall-copilot/.local/state/oncall-copilot"),
+		NotesDir:         opt("NOTES_DIR", "/var/lib/oncall-copilot/notes"),
 		ClaudeBin:        opt("CLAUDE_BIN", "claude"),
 		ClaudeModel:      opt("CLAUDE_MODEL", ""),
 		MetarepoDir:      req("METAREPO_DIR"),

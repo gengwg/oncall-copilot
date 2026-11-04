@@ -42,6 +42,9 @@ KUBECONFIG_DIR="${KUBECONFIG_DIR:-}"
 # private TSV: cluster, site, channel name, channel ID, how tickets open.
 DC_DRAFT_DIR="${DC_DRAFT_DIR:-}"
 DC_PROVIDERS="${DC_PROVIDERS:-}"
+# The owner's findings per node, written by the Slack agent's `note` reply:
+# <cluster>@<node>.tsv, one "ts<TAB>ref<TAB>alertname<TAB>text" line per note.
+NOTES_DIR="${NOTES_DIR:-}"
 MODEL="${MODEL:-nvidia/Nemotron-3-Ultra-550b-a55b}"
 INFERENCE_URL="${INFERENCE_URL:-https://inference.local/v1/chat/completions}"
 
@@ -154,6 +157,23 @@ if [ -n "$prev" ]; then
   prev_seen=$(basename "$prev" | cut -c1-10)
   prev_cause=$(awk '/^## /{f=($0=="## Root cause"); next} f' "$prev" | clip 400)
 fi
+
+# The owner's own notes on this node, newest five. A previous brief is only
+# the model's guess; these are what a person found.
+owner_notes=""
+notes_count=0
+notes_latest=""
+notes_file="$NOTES_DIR/$cluster@$node.tsv"
+if [ -n "$NOTES_DIR" ] && [ -n "$cluster" ] && [ -r "$notes_file" ]; then
+  notes_count=$(grep -c . "$notes_file")
+  owner_notes=$(tail -n 5 "$notes_file" | awk -F'\t' 'NF >= 4 { print "- " substr($1, 1, 10) ", on " $2 " " $3 ": " substr($4, 1, 600) }')
+  notes_latest=$(tail -n 1 "$notes_file" | cut -c1-10)
+fi
+notes_section=""
+[ -n "$owner_notes" ] && notes_section="
+OWNER NOTES FOR THIS NODE (the on-call owner's own findings, newest last; where they disagree with the previous incident, they are right):
+$owner_notes
+"
 
 # --- evidence collection (scenario-aware, read-only, bounded) ---
 # Anchor the log window to the alert's start so repeated runs don't re-read the
@@ -346,7 +366,7 @@ $web_context
 
 PREVIOUS INCIDENT FOR THIS ALERT ($prev_seen):
 $prev_cause
-
+$notes_section
 RUNBOOK EXCERPT:
 $(printf '%s' "$runbook" | head -20)
 
@@ -531,6 +551,7 @@ fi
   printf -- '- **Related**: %s\n\n' "$related"
   printf '## Root cause\n%s\n\n' "$rootcause"
   printf '## Ruled out\n%s\n\n' "$ruled_out"
+  [ -n "$owner_notes" ] && printf '## Owner notes\n%s\n\n' "$owner_notes"
   printf '## Timeline\n'
   printf -- '- condition true: %s\n' "$(hms "$pending_s")"
   printf -- '- alert fired: %s\n' "$(hms "$start_s")"
@@ -556,6 +577,9 @@ printf 'ALERT: %s (%s)\nService: %s\nLikely cause: %s\nConfidence: %s\nVerdict: 
   "$err_ratio" "$heap" "$lat_mode" "$(printf '%s' "$action" | clip 120)" "$ttb"
 if [ -n "$degraded" ]; then
   printf 'Degraded: %s\n' "$degraded"
+fi
+if [ "$notes_count" -gt 0 ]; then
+  printf 'Owner notes: %s on file, latest %s\n' "$notes_count" "$notes_latest"
 fi
 if [ -n "$dc_draft" ]; then
   printf 'DC draft: %s\n' "$dc_draft"

@@ -8,7 +8,7 @@ Two services, two users, one host.
 | Unit | `oncall-copilot-poll.timer` (system) | `oncall-slack-agent.service` (`systemd --user`, linger on) |
 | Config | `/var/lib/oncall-copilot/.config/oncall-copilot/env` | `~/.config/oncall-copilot/agent.env` (see `user/agent.env.example`) |
 | Installer | `install.sh` (sudo) | `install-slack-agent.sh` (no sudo) |
-| Writes | the outbox, briefs log, DC drafts | IRM acknowledge/unacknowledge only, Slack DMs, its own state dir |
+| Writes | the outbox, briefs log, DC drafts | IRM acknowledge/unacknowledge only, Slack DMs, its own state dir, the owner's notes |
 
 ## Prerequisites (Phase 0, once per fleet)
 
@@ -69,8 +69,10 @@ it; `POLLER_STATE_DIR` sets where (default
 1. Merge to main first. `install.sh` pulls main into the poller's clone and then
    re-executes itself, so a branch is never what gets installed.
 2. `sudo bash /var/lib/oncall-copilot/oncall-copilot/deploy/systemd/install.sh`
-   creates `/var/lib/oncall-copilot/outbox` (0750, group `oncall-copilot`), adds
-   the invoking user to that group, installs the units and starts the timer.
+   creates `/var/lib/oncall-copilot/outbox` (0750, group `oncall-copilot`) and
+   `/var/lib/oncall-copilot/notes` (2770, the same group; the agent writes the
+   owner's `note` replies there and the poller reads them), adds the invoking
+   user to that group, installs the units and starts the timer.
 3. `sudo systemctl restart user@$(id -u).service` once, so the owner's user
    manager picks up the new group. Linger keeps the old manager alive, so a plain
    re-login is not enough. This briefly restarts the owner's other user services.
