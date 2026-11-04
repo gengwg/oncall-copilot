@@ -384,8 +384,8 @@ case "$fault" in
   *) fault="real - no fault call given, treating as real" ;;
 esac
 
-# Owner's rule: a known GPU Xid on a node that is already contained (cordoned,
-# or carrying the gpu-fault taint) never pages. The DC request flow decides
+# Owner's rule: a known GPU Xid (from either Xid alert rule) on a node that is
+# already contained (cordoned, or carrying the gpu-fault taint) never pages. The DC request flow decides
 # whether to file or follow up, so it always gets the draft, whatever the model
 # said about FAULT. No node evidence, an unmapped cluster or any other alert
 # keeps the model's verdict. The hold only applies once the draft exists, so a
@@ -394,7 +394,7 @@ prov=""
 [ -r "$DC_PROVIDERS" ] && [ -n "$node" ] && prov=$(awk -F'\t' -v c="$cluster" '$1 == c' "$DC_PROVIDERS" | head -1)
 contained_xid=""
 hold_verdict=""
-case "$alertname" in "GPU Xid Critical"|"GPU Xid Critical ("*)
+case "$alertname" in "GPU Xid Critical"|"GPU Xid Critical ("*|"GPU XID hardware fault"|"GPU XID hardware fault ("*)
   if [ -n "$prov" ]; then
     reasons=""
     [ "$node_cordoned" = true ] && reasons="node cordoned"

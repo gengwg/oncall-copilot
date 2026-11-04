@@ -608,6 +608,9 @@ check "contained Xid, model says false alarm -> held" "Verdict: hold - contained
 check "contained Xid, model says false alarm -> still drafted" "Hardware request" "$draft"
 rm -f "$TMP/last_prompt.hwfalse"; touch "$TMP/last_prompt.hwpage"
 
+xid_case "$(node_line c1 'GPU XID hardware fault (critical)')" "${DC[@]}"
+check "contained Xid, hardware-fault rule -> hold" "Verdict: hold - contained known Xid (node cordoned)$HOLD_TAIL" "$OUT"
+
 xid_case "$(node_line c3)" "${DC[@]}"
 check "unmapped cluster -> model's page stands" "Verdict: page - GPU 3 fell off the bus" "$OUT"
 [ -z "$draft" ] && ok "unmapped cluster -> no draft" || bad "unmapped cluster -> no draft" "$draft"

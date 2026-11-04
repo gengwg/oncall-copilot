@@ -888,3 +888,17 @@ func TestDigestWithBriefsKeepsItsHeader(t *testing.T) {
 		t.Fatalf("got %q", h.poster.posts)
 	}
 }
+
+// Some alert rules name the node in a Hostname label; a hand-attached alert
+// from one must still give the DC runner its node, as the poller does.
+func TestEventFromAlertReadsHostnameAsNode(t *testing.T) {
+	ev := eventFromAlert("irm", pager.Alert{Labels: map[string]string{
+		"alertname": "GPU XID hardware fault (critical)", "cluster": "c1", "Hostname": "gpu-h"}})
+	if ev.Node != "gpu-h" {
+		t.Fatalf("node: %q", ev.Node)
+	}
+	ev = eventFromAlert("irm", pager.Alert{Labels: map[string]string{"node": "n1", "Hostname": "other"}})
+	if ev.Node != "n1" {
+		t.Fatalf("node label must win: %q", ev.Node)
+	}
+}

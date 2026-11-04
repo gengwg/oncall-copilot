@@ -192,9 +192,13 @@ for g in "${groups[@]}"; do
     continue
   fi
 
-  # The relay's line shape, built from the group's firing alert.
+  # The relay's line shape, built from the group's firing alert. Some rules
+  # name the node in a Hostname label; read it as node here, once, so dedup,
+  # node evidence, the contained-Xid hold and the outbox all see it.
   line=$(printf '%s' "$g" | jq -c --arg pager "$ONCALL_PAGER" --arg label "$LABEL" \
-    '{status: "firing"} + .alert + {pager: $pager, label: $label, ref, url}')
+    '{status: "firing"} + .alert + {pager: $pager, label: $label, ref, url}
+     | if (.labels | type) == "object" and (.labels.node // "") == "" and (.labels.Hostname // "") != ""
+       then .labels.node = .labels.Hostname else . end')
   # Two different checks. The same alert on the same node is one problem. The
   # same alert on other nodes is separate hardware and gets its own brief, up
   # to STORM_MAX per alert and cluster per window: a label rename that fires on

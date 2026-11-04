@@ -127,6 +127,14 @@ lacks "new group -> customer label not passed on" '"customer"' "$(cat "$TMP/inve
 check "new group -> line carries the IRM number" '"ref":"103"' "$(cat "$TMP/investigated")"
 check "new group -> line carries the Slack permalink" '"url":"https://slack.example/archives/C1/p103"' "$(cat "$TMP/investigated")"
 
+# Some alert rules name the node in a Hostname label. The poller reads it as
+# node, so dedup, node evidence and the outbox event all see the node.
+set_groups "$(group G9 109 new 'GPU XID hardware fault (critical)' c2 critical | jq -c '.last_alert.payload.alerts[0].labels |= (del(.node) + {Hostname:"gpu-node-h"})')" \
+  "$(group G3 103 new GpuFellOff c2 critical)" "$(group G2 102 new XidCritical c1 critical)" "$(group G1 101 acknowledged NvlinkDown c1 warning)"
+run_poll
+check "Hostname label -> read as node" '"node":"gpu-node-h"' "$(tail -1 "$TMP/investigated")"
+check "Hostname label -> original label kept" '"Hostname":"gpu-node-h"' "$(tail -1 "$TMP/investigated")"
+
 # 3. Polling again changes nothing.
 : > "$TMP/investigated"
 run_poll
