@@ -54,7 +54,7 @@ the operator's admin kubeconfigs, in a sandboxed unit (`ProtectHome`,
   until a healthy brief. The 08:05 digest now carries a health line for both
   services, so a quiet heartbeat channel no longer means problems go unseen.
 - **A contained known Xid holds, and the DC flow follows up.** A `GPU Xid
-  Critical` alert on a mapped cluster whose node is cordoned or carries the
+  Critical` or `GPU XID hardware fault` alert on a mapped cluster whose node is cordoned or carries the
   gpu-fault taint gets the hold verdict "hold - contained known Xid (<reasons>)",
   naming which of the two applied, and the poller always writes its local DC
   draft file, whatever the model said. The hold applies only once that file is
