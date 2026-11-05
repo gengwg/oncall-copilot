@@ -95,25 +95,42 @@ func (e Event) StartTime() (t time.Time, ok bool) {
 	return t, err == nil
 }
 
-// Record is what the agent did with one event. Stages only move forward and
-// each is saved before the next side effect, so a restart repeats nothing.
+// ReplyReceipt is the durable delivery state of one automatic thread reply.
+// Attempts counts Slack post calls; reconciliation reads do not increment it.
+type ReplyReceipt struct {
+	ID         string `json:"id"`
+	ThreadTS   string `json:"thread_ts"`
+	Text       string `json:"text"`
+	Attempts   int    `json:"attempts"`
+	Generation uint64 `json:"generation,omitempty"`
+	SentAt     string `json:"sent_at,omitempty"`
+	LastError  string `json:"last_error,omitempty"`
+}
+
+// Record is what the agent did with one event. State and the intent to perform
+// its next side effect are saved together so a restart can resume them.
 type Record struct {
-	ID           string `json:"id"`
-	Event        Event  `json:"event"`
-	SlackTS      string `json:"slack_ts,omitempty"`
-	PostedAt     string `json:"posted_at,omitempty"`
-	PostAttempts int    `json:"post_attempts"`
-	PostFailed   bool   `json:"post_failed,omitempty"`
-	Collapsed    bool   `json:"collapsed,omitempty"`
-	Deferred     bool   `json:"deferred,omitempty"` // off-shift: held for the morning digest, no DM
-	DeferredAt   string `json:"deferred_at,omitempty"`
-	Digested     bool   `json:"digested,omitempty"`
-	AckDecided   bool   `json:"ack_decided"`
-	AckedAt      string `json:"acked_at,omitempty"`
-	AckNote      string `json:"ack_note,omitempty"`
-	DCStatus     string `json:"dc_status,omitempty"`
-	DCDetail     string `json:"dc_detail,omitempty"` // the last run's detail: draft channel, thread or existing request
-	UpdatedAt    string `json:"updated_at"`
+	ID           string        `json:"id"`
+	Event        Event         `json:"event"`
+	SlackTS      string        `json:"slack_ts,omitempty"`
+	PostedAt     string        `json:"posted_at,omitempty"`
+	PostAttempts int           `json:"post_attempts"`
+	PostFailed   bool          `json:"post_failed,omitempty"`
+	Collapsed    bool          `json:"collapsed,omitempty"`
+	Deferred     bool          `json:"deferred,omitempty"` // off-shift: held for the morning digest, no DM
+	DeferredAt   string        `json:"deferred_at,omitempty"`
+	Digested     bool          `json:"digested,omitempty"`
+	AckDecided   bool          `json:"ack_decided"`
+	AckInFlight  bool          `json:"ack_in_flight,omitempty"`
+	AckedAt      string        `json:"acked_at,omitempty"`
+	AckNote      string        `json:"ack_note,omitempty"`
+	AckReply     *ReplyReceipt `json:"ack_reply,omitempty"`
+	DCStatus     string        `json:"dc_status,omitempty"`
+	DCDetail     string        `json:"dc_detail,omitempty"` // the last run's detail: draft channel, thread or existing request
+	DCAttempt    uint64        `json:"dc_attempt,omitempty"`
+	DCForce      bool          `json:"dc_force,omitempty"`
+	DCReply      *ReplyReceipt `json:"dc_reply,omitempty"`
+	UpdatedAt    string        `json:"updated_at"`
 }
 
 type recordAlias Record

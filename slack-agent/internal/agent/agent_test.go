@@ -25,23 +25,55 @@ import (
 // --- fakes
 
 type fakePoster struct {
-	fail    bool
-	n       int
-	posts   []string
-	replies []string
+	fail                  bool
+	replyFailures         int
+	ambiguousReplyFailure bool
+	postStarted           chan struct{}
+	postRelease           chan struct{}
+	replyCalls            int
+	n                     int
+	posts                 []string
+	replies               []string
+	replyIDs              map[string]bool
 }
 
 func (p *fakePoster) PostDM(_ context.Context, text string) (string, error) {
 	if p.fail {
 		return "", errors.New("slack down")
 	}
+	if p.postStarted != nil {
+		close(p.postStarted)
+		<-p.postRelease
+	}
 	p.n++
 	p.posts = append(p.posts, text)
 	return fmt.Sprintf("ts%d", p.n), nil
 }
 func (p *fakePoster) Reply(_ context.Context, ts, text string) error {
+	return p.postReply(ts, text, "")
+}
+func (p *fakePoster) ReplyIdentified(_ context.Context, ts, text, receiptID string) error {
+	return p.postReply(ts, text, receiptID)
+}
+func (p *fakePoster) postReply(ts, text, receiptID string) error {
+	p.replyCalls++
+	if p.replyFailures > 0 {
+		p.replyFailures--
+		return errors.New("slack reply failed")
+	}
 	p.replies = append(p.replies, ts+": "+text)
+	if p.replyIDs == nil {
+		p.replyIDs = map[string]bool{}
+	}
+	p.replyIDs[ts+"\x00"+text+"\x00"+receiptID] = true
+	if p.ambiguousReplyFailure {
+		p.ambiguousReplyFailure = false
+		return errors.New("reply delivered, response lost")
+	}
 	return nil
+}
+func (p *fakePoster) ReplyExists(_ context.Context, ts, text, receiptID string) (bool, error) {
+	return p.replyIDs[ts+"\x00"+text+"\x00"+receiptID], nil
 }
 func (p *fakePoster) lastReply() string {
 	if len(p.replies) == 0 {
@@ -122,12 +154,13 @@ var (
 )
 
 type harness struct {
-	t      *testing.T
-	a      *Agent
-	poster *fakePoster
-	irm    *fakeIRM
-	runner *fakeRunner
-	outbox string
+	t          *testing.T
+	a          *Agent
+	poster     *fakePoster
+	irm        *fakeIRM
+	runner     *fakeRunner
+	outbox     string
+	ledgerPath string
 }
 
 func newHarness(t *testing.T, shifts []oncall.Shift) *harness {
@@ -141,10 +174,10 @@ func newHarness(t *testing.T, shifts []oncall.Shift) *harness {
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	h := &harness{t: t, poster: &fakePoster{}, irm: &fakeIRM{}, runner: &fakeRunner{res: dcrequest.Result{Status: dcrequest.Drafted, Detail: "#ext-x", CostUSD: 7.25}}, outbox: out}
+	h := &harness{t: t, poster: &fakePoster{}, irm: &fakeIRM{}, runner: &fakeRunner{res: dcrequest.Result{Status: dcrequest.Drafted, Detail: "#ext-x", CostUSD: 7.25}}, outbox: out, ledgerPath: filepath.Join(dir, "dc.tsv")}
 	h.a = &Agent{
 		Outbox: out, Store: store, Poster: h.poster, Pager: h.irm, Shifts: fakeShifts{shifts},
-		Ledger: ledger.New(filepath.Join(dir, "dc.tsv")), Runner: h.runner,
+		Ledger: ledger.New(h.ledgerPath), Runner: h.runner,
 		CollapseMax: 6, Now: func() time.Time { return now },
 		DigestMarker: filepath.Join(dir, "digest-last"),
 	}

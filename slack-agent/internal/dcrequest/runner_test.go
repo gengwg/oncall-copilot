@@ -1,6 +1,7 @@
 package dcrequest
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -58,6 +59,14 @@ func TestExitFailureTrustsResultLine(t *testing.T) {
 	got := exitFailure(stdout, nil, fmt.Errorf("exit status 1"), false, time.Minute)
 	if got.Status != AlreadySent || got.Detail != "https://slack/p1" || got.CostUSD != 0.4 {
 		t.Fatalf("trusted result overwritten: %+v", got)
+	}
+}
+
+func TestExitFailureTrustsCompletedResultWhenTimedOut(t *testing.T) {
+	stdout := []byte(`{"result":"RESULT: DRAFTED #ext-x","total_cost_usd":0.4}`)
+	got := exitFailure(stdout, nil, context.DeadlineExceeded, true, time.Minute)
+	if got.Status != Drafted || got.Detail != "#ext-x" || got.CostUSD != 0.4 {
+		t.Fatalf("completed result overwritten by timeout: %+v", got)
 	}
 }
 
