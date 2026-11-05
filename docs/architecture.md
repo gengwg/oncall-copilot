@@ -49,8 +49,20 @@ slack-agent (owner's user, Socket Mode)
   <- owner DM commands, matched to records by thread ts or by #number / card link
 ```
 
-Each record stage is saved before the next side effect, so a restart repeats
-nothing. A dead agent, a failed DM or a stale shift table all mean "not acked",
+Each record carries durable receipts for its automatic ack and latest DC
+result. Receipt intent is saved with the decision or result; before retrying a
+post, the agent reads the thread and reconciles the receipt ID in Slack message
+metadata plus the exact bot text, covering a success response lost after Slack
+accepted the message. Reply retries never repeat an already-persisted pager ack
+or DC model result. The agent saves an in-flight marker before the pager call,
+so an acknowledged pager after a crash is not rewritten as "not acked"; a human
+ack without that marker keeps the old behavior. DC attempts persist their
+generation, queued/running state and force bit. The worker drains them at
+startup, a cancelled run remains recoverable, and a newer generation rejects an
+older run's completion, ledger write and reply. The terminal result is saved
+before the advisory ledger. A process crash between the external runner
+returning and that first result save remains an at-least-once execution window.
+A dead agent, a failed brief DM or a stale shift table all mean "not acked",
 which is what IRM did before the agent existed.
 
 ## Key implementation decisions

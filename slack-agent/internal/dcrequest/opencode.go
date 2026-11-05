@@ -115,21 +115,27 @@ func (r OpenCodeRunner) FileDCRequest(ctx context.Context, ev event.Event) (Resu
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	cmd.Env = OpenCodeEnv(os.Environ())
 	err := cmd.Run()
-	res := ParseOpenCode(stdout.Bytes())
+	return openCodeExitResult(stdout.Bytes(), stderr.Bytes(), err, ctx.Err() != nil, timeout), nil
+}
+
+func openCodeExitResult(stdout, stderr []byte, runErr error, timedOut bool, timeout time.Duration) Result {
+	res := ParseOpenCode(stdout)
 	switch {
-	case ctx.Err() != nil:
-		return Result{Status: Failed, Detail: "timed out after " + timeout.String(), CostUSD: res.CostUSD}, nil
-	case err != nil && res.Status == Failed:
-		reason := strings.TrimSpace(stderr.String())
+	case res.Status != Failed:
+		return res
+	case timedOut:
+		return Result{Status: Failed, Detail: "timed out after " + timeout.String(), CostUSD: res.CostUSD}
+	case runErr != nil:
+		reason := strings.TrimSpace(string(stderr))
 		if reason == "" {
 			reason = strings.TrimPrefix(res.Detail, "no RESULT line: ")
 		}
 		if len(reason) > 300 {
 			reason = reason[:300]
 		}
-		return Result{Status: Failed, Detail: fmt.Sprintf("opencode exited: %v; %s", err, reason), CostUSD: res.CostUSD}, nil
+		return Result{Status: Failed, Detail: fmt.Sprintf("opencode exited: %v; %s", runErr, reason), CostUSD: res.CostUSD}
 	}
-	return res, nil
+	return res
 }
 
 // ParseOpenCode reads `opencode run --format json` output, one event per

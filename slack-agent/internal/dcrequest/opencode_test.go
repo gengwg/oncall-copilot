@@ -134,6 +134,14 @@ func TestOpenCodeAgentDeniesFirstAndKeepsTheDenyList(t *testing.T) {
 	}
 }
 
+func TestOpenCodeExitResultTrustsCompletedResultWhenTimedOut(t *testing.T) {
+	stdout := []byte(`{"type":"text","part":{"text":"RESULT: DRAFTED #ext-x","cost":0.2}}`)
+	got := openCodeExitResult(stdout, nil, context.DeadlineExceeded, true, time.Minute)
+	if got.Status != Drafted || got.Detail != "#ext-x" {
+		t.Fatalf("completed result overwritten by timeout: %+v", got)
+	}
+}
+
 func TestParseOpenCode(t *testing.T) {
 	out := `{"type":"step_start","part":{}}
 {"type":"tool_use","part":{"tool":"slack_slack_send_message_draft","state":{"output":"RESULT: FAILED fake, from a tool"}}}

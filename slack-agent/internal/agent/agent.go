@@ -1,6 +1,6 @@
 // Package agent sequences what happens to one brief: post it to the owner,
 // decide whether to ack, and hand hardware faults to the DC request runner.
-// Every step is saved to the record before the next side effect.
+// Automatic work and delivery intent are saved before the next side effect.
 package agent
 
 import (
@@ -11,6 +11,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gengwg/oncall-copilot/slack-agent/internal/dcrequest"
@@ -89,14 +90,17 @@ type Agent struct {
 	// into later briefs on that node.
 	Notes notes.Store
 
-	dcJobs chan dcJob
+	recordMu sync.Mutex
+	dcRunMu  sync.Mutex
+	dcWake   chan struct{}
+	dcOnce   sync.Once
 }
 
 func (a *Agent) label() string { return pager.Label(a.PagerName) }
 
 type dcJob struct {
-	id    string
-	force bool
+	id      string
+	attempt uint64
 }
 
 func (a *Agent) now() time.Time {
@@ -114,6 +118,7 @@ func (a *Agent) logf(format string, args ...any) {
 
 // Tick scans the outbox once and handles every event that still has work.
 func (a *Agent) Tick(ctx context.Context) error {
+	a.flushAllReplies(ctx)
 	events, scanErr := outbox.Scan(a.Outbox)
 	var fresh []event.Event
 	var pending []event.Event
@@ -137,7 +142,7 @@ func (a *Agent) Tick(ctx context.Context) error {
 				rec := &event.Record{ID: ev.ID, Event: ev, Deferred: true, AckDecided: true,
 					DeferredAt: a.now().UTC().Format(time.RFC3339),
 					AckNote:    "not acked: not your shift; held for the morning digest"}
-				if err := a.Store.Save(rec); err != nil {
+				if err := a.saveRecordIfAbsent(rec); err != nil {
 					return err
 				}
 			}
@@ -169,6 +174,21 @@ func (a *Agent) Tick(ctx context.Context) error {
 
 func (a *Agent) wantsDC(rec *event.Record) bool {
 	return rec.Event.DCDraft != nil && rec.DCStatus == ""
+}
+
+// saveRecordIfAbsent preserves a command that attached an event after Tick
+// classified it as fresh. Existing state is never replaced by that stale view.
+func (a *Agent) saveRecordIfAbsent(rec *event.Record) error {
+	a.recordMu.Lock()
+	defer a.recordMu.Unlock()
+	current, err := a.Store.Get(rec.ID)
+	if err != nil {
+		return err
+	}
+	if current != nil {
+		return nil
+	}
+	return a.Store.Save(rec)
 }
 
 // digest posts, once per day after DigestAt, everything deferred since the
@@ -231,8 +251,16 @@ func (a *Agent) digest(ctx context.Context) error {
 			return fmt.Errorf("post: %w", err)
 		}
 		for i := range recs {
-			recs[i].Digested = true
-			if err := a.Store.Save(&recs[i]); err != nil {
+			// The digest post may overlap a command or DC completion. Merge only
+			// this fact into the current record instead of saving our stale copy.
+			a.recordMu.Lock()
+			rec, err := a.Store.Get(recs[i].ID)
+			if err == nil && rec != nil {
+				rec.Digested = true
+				err = a.Store.Save(rec)
+			}
+			a.recordMu.Unlock()
+			if err != nil {
 				return err
 			}
 		}
@@ -300,7 +328,7 @@ func (a *Agent) collapse(ctx context.Context, evs []event.Event) error {
 	for _, ev := range evs {
 		rec := &event.Record{ID: ev.ID, Event: ev, SlackTS: ts, PostedAt: now, PostAttempts: 1,
 			Collapsed: true, AckDecided: true, AckNote: "not acked: part of a burst summary"}
-		if err := a.Store.Save(rec); err != nil {
+		if err := a.saveRecordIfAbsent(rec); err != nil {
 			return err
 		}
 	}
@@ -309,6 +337,8 @@ func (a *Agent) collapse(ctx context.Context, evs []event.Event) error {
 
 // HandleEvent moves one event forward as far as it can this tick.
 func (a *Agent) HandleEvent(ctx context.Context, ev event.Event) error {
+	a.recordMu.Lock()
+	defer a.recordMu.Unlock()
 	rec, err := a.Store.Get(ev.ID)
 	if err != nil {
 		return err
@@ -345,35 +375,46 @@ func (a *Agent) HandleEvent(ctx context.Context, ev event.Event) error {
 		case ackRetry:
 			a.logf("event %s: %s; retrying next tick", ev.ID, note)
 			return nil
+		case ackConfirm:
+			rec.AckedAt = a.now().UTC().Format(time.RFC3339)
+			note = fmt.Sprintf("%s #%s was already acknowledged", a.label(), ev.Ref)
 		case ackYes:
 			if a.DryRun {
 				note = "would ack (dry run): your shift, brief delivered"
-			} else if err := a.Pager.Acknowledge(ctx, ev.ID); err != nil && !errors.Is(err, pager.ErrAlreadyAcked) {
+				break
+			}
+			rec.AckInFlight = true
+			if err := a.Store.Save(rec); err != nil {
+				return err
+			}
+			err := a.Pager.Acknowledge(ctx, ev.ID)
+			if err != nil && !errors.Is(err, pager.ErrAlreadyAcked) {
 				a.logf("event %s: ack failed: %v; retrying next tick", ev.ID, err)
 				return nil
-			} else {
-				rec.AckedAt = a.now().UTC().Format(time.RFC3339)
-				note = fmt.Sprintf("acked %s #%s: your shift, brief delivered", a.label(), ev.Ref)
-				if errors.Is(err, pager.ErrAlreadyAcked) {
-					note = fmt.Sprintf("%s #%s was already acknowledged", a.label(), ev.Ref)
-				}
+			}
+			rec.AckedAt = a.now().UTC().Format(time.RFC3339)
+			note = fmt.Sprintf("acked %s #%s: your shift, brief delivered", a.label(), ev.Ref)
+			if errors.Is(err, pager.ErrAlreadyAcked) {
+				note = fmt.Sprintf("%s #%s was already acknowledged", a.label(), ev.Ref)
 			}
 		}
+		rec.AckInFlight = false
 		rec.AckDecided = true
 		rec.AckNote = note
+		rec.AckReply = &event.ReplyReceipt{ID: "ack", ThreadTS: rec.SlackTS, Text: note}
 		if err := a.Store.Save(rec); err != nil {
 			return err
 		}
-		if err := a.Poster.Reply(ctx, rec.SlackTS, note); err != nil {
+	}
+	if hasPendingReply(rec) {
+		if err := a.flushRepliesLocked(ctx, rec); err != nil {
 			a.logf("event %s: reply failed: %v", ev.ID, err)
 		}
 	}
 	if a.wantsDC(rec) {
-		rec.DCStatus = "queued"
-		if err := a.Store.Save(rec); err != nil {
+		if err := a.queueDC(rec, false); err != nil {
 			return err
 		}
-		a.enqueue(dcJob{id: ev.ID})
 	}
 	return nil
 }
@@ -384,10 +425,27 @@ const (
 	ackNo ackDecision = iota
 	ackYes
 	ackRetry
+	ackConfirm
 )
 
 // ackGate is the whole policy. Every "no" is explained in the thread.
 func (a *Agent) ackGate(ctx context.Context, ev event.Event, rec *event.Record) (ackDecision, string) {
+	if rec.AckInFlight {
+		// This attempt already passed the gate. Recover it from pager state rather
+		// than applying a new shift or schedule after a restart.
+		g, err := a.Pager.Get(ctx, ev.ID)
+		if err != nil {
+			return ackRetry, a.label() + " lookup failed: " + err.Error()
+		}
+		switch g.State {
+		case "acknowledged":
+			return ackConfirm, ""
+		case "firing":
+			return ackYes, ""
+		default:
+			return ackNo, "not acked: already " + g.State
+		}
+	}
 	if rec.SlackTS == "" || rec.Collapsed {
 		return ackNo, "not acked: brief not individually delivered"
 	}
@@ -462,66 +520,124 @@ func orDash(s string) string {
 
 // --- DC requests: one worker, so two alerts on one node cannot both draft.
 
-func (a *Agent) enqueue(j dcJob) {
-	if a.dcJobs == nil {
-		a.dcJobs = make(chan dcJob, 64)
+const dcRetryInterval = 10 * time.Second
+
+func dcPending(status string) bool { return status == "queued" || status == "running" }
+
+// queueDC persists the queue entry before waking the worker. The caller holds
+// recordMu; the record, not the wake-up channel, owns the job.
+func (a *Agent) queueDC(rec *event.Record, force bool) error {
+	rec.DCAttempt++
+	rec.DCStatus = "queued"
+	rec.DCForce = force
+	clearPendingDCReply(rec)
+	if err := a.Store.Save(rec); err != nil {
+		return err
 	}
+	a.wakeDC()
+	return nil
+}
+
+func (a *Agent) wakeDC() {
+	a.dcOnce.Do(func() { a.dcWake = make(chan struct{}, 1) })
 	select {
-	case a.dcJobs <- j:
+	case a.dcWake <- struct{}{}:
 	default:
-		a.logf("dc queue full; dropping job for %s", j.id)
 	}
 }
 
-// RunDCWorker drains the queue until ctx ends.
+// RunDCWorker recovers persisted attempts at startup, then drains on wake-ups
+// and retries interrupted store or runner transitions on a bounded interval.
 func (a *Agent) RunDCWorker(ctx context.Context) {
-	if a.dcJobs == nil {
-		a.dcJobs = make(chan dcJob, 64)
-	}
+	a.dcOnce.Do(func() { a.dcWake = make(chan struct{}, 1) })
+	ticker := time.NewTicker(dcRetryInterval)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case j := <-a.dcJobs:
-			if err := a.runDC(ctx, j); err != nil {
-				a.logf("dc %s: %v", j.id, err)
-			}
+		default:
+		}
+		a.DrainDC(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-a.dcWake:
+		case <-ticker.C:
 		}
 	}
 }
 
-// DrainDC runs queued jobs synchronously; for tests and for shutdown.
+// DrainDC runs persisted jobs synchronously; for tests and for shutdown. A
+// failed transition remains queued for the worker's next interval.
 func (a *Agent) DrainDC(ctx context.Context) {
+	a.dcRunMu.Lock()
+	defer a.dcRunMu.Unlock()
 	for {
-		select {
-		case j := <-a.dcJobs:
-			if err := a.runDC(ctx, j); err != nil {
-				a.logf("dc %s: %v", j.id, err)
+		recs, err := a.Store.All()
+		if err != nil {
+			a.logf("dc queue: %v", err)
+			return
+		}
+		var next *dcJob
+		for i := range recs {
+			if dcPending(recs[i].DCStatus) {
+				next = &dcJob{id: recs[i].ID, attempt: recs[i].DCAttempt}
+				break
 			}
-		default:
+		}
+		if next == nil {
+			return
+		}
+		if err := a.runDC(ctx, *next); err != nil {
+			a.logf("dc %s: %v", next.id, err)
 			return
 		}
 	}
 }
 
 func (a *Agent) runDC(ctx context.Context, j dcJob) error {
+	a.recordMu.Lock()
 	rec, err := a.Store.Get(j.id)
-	if err != nil || rec == nil {
-		return fmt.Errorf("record %s: %v", j.id, err)
+	if err != nil {
+		a.recordMu.Unlock()
+		return err
 	}
-	ev := rec.Event
+	if rec == nil {
+		a.recordMu.Unlock()
+		return fmt.Errorf("record %s not found", j.id)
+	}
+	if rec.DCAttempt == 0 && j.attempt == 0 {
+		// Records queued by the previous version had no generation or force bit.
+		rec.DCAttempt = 1
+		j.attempt = 1
+	}
+	if rec.DCAttempt != j.attempt || !dcPending(rec.DCStatus) {
+		a.recordMu.Unlock()
+		return nil
+	}
+	rec.DCStatus = "running"
+	if err := a.Store.Save(rec); err != nil {
+		a.recordMu.Unlock()
+		return err
+	}
+	force, ev := rec.DCForce, rec.Event
+	a.recordMu.Unlock()
+
 	now := a.now()
-	if !j.force {
+	if !force {
 		if e, ok := a.Ledger.Recent(ev.Cluster, ev.Node, now.Add(-ledgerWindow)); ok && !ticketedAndStale(e, now) {
-			rec.DCStatus = "skipped_recent"
-			if err := a.Store.Save(rec); err != nil {
-				return err
-			}
-			return a.Poster.Reply(ctx, rec.SlackTS, fmt.Sprintf("DC request not drafted: %s/%s already %s on %s (%s %s). Reply `file` to draft anyway.",
-				ev.Cluster, ev.Node, e.Status, e.TS.In(time.Local).Format("Jan 2"), a.label(), e.ID))
+			msg := fmt.Sprintf("DC request not drafted: %s/%s already %s on %s (%s %s). Reply `file` to draft anyway.",
+				ev.Cluster, ev.Node, e.Status, e.TS.In(time.Local).Format("Jan 2"), a.label(), e.ID)
+			return a.finishDC(ctx, j, "skipped_recent", msg, nil, nil)
 		}
 	}
 	res, err := a.Runner.FileDCRequest(ctx, ev)
+	if ctx.Err() != nil && (err != nil || res.Status == dcrequest.Failed) {
+		// Both production runners report cancellation as Failed with a nil error.
+		// Leave the attempt running for startup recovery; a completed draft stands.
+		return ctx.Err()
+	}
 	if err != nil {
 		res = dcrequest.Result{Status: dcrequest.Failed, Detail: err.Error()}
 	}
@@ -548,14 +664,43 @@ func (a *Agent) runDC(ctx context.Context, j dcJob) error {
 		msg += " Claude Code was at its spend limit, so " + res.Via + " ran the skill."
 	}
 	a.logf("dc %s: %s, cost $%.2f%s", ev.ID, status, res.CostUSD, viaNote(res.Via))
-	if err := a.Ledger.Append(ledger.Entry{TS: now, Cluster: ev.Cluster, Node: ev.Node, ID: ev.ID, Status: status}); err != nil {
-		a.logf("dc %s: ledger write failed, the next alert on %s may draft again: %v", ev.ID, ev.Node, err)
+	entry := &ledger.Entry{TS: now, Cluster: ev.Cluster, Node: ev.Node, ID: ev.ID, Status: status}
+	return a.finishDC(ctx, j, status, msg, &res, entry)
+}
+
+// finishDC rejects a completion after a newer command or status change has
+// superseded it. The runner's external side effects cannot be undone, but the
+// old result cannot overwrite current state or announce itself as current.
+func (a *Agent) finishDC(ctx context.Context, j dcJob, status, msg string, res *dcrequest.Result, entry *ledger.Entry) error {
+	a.recordMu.Lock()
+	defer a.recordMu.Unlock()
+	rec, err := a.Store.Get(j.id)
+	if err != nil {
+		return err
 	}
-	rec.DCStatus, rec.DCDetail = status, res.Detail
+	if rec == nil {
+		return fmt.Errorf("record %s not found", j.id)
+	}
+	if rec.DCAttempt != j.attempt || rec.DCStatus != "running" {
+		a.logf("dc %s attempt %d: discarding stale completion", j.id, j.attempt)
+		return nil
+	}
+	rec.DCStatus = status
+	if res != nil {
+		rec.DCDetail = res.Detail
+	}
+	rec.DCReply = &event.ReplyReceipt{ID: fmt.Sprintf("dc:%d", j.attempt), ThreadTS: rec.SlackTS, Text: msg, Generation: j.attempt}
 	if err := a.Store.Save(rec); err != nil {
 		return err
 	}
-	return a.Poster.Reply(ctx, rec.SlackTS, msg)
+	// The terminal result is durable before this advisory suppression record.
+	// A ledger failure may repeat work on a later alert, never this result reply.
+	if entry != nil {
+		if err := a.Ledger.Append(*entry); err != nil {
+			a.logf("dc %s: ledger write failed, the next alert on %s may draft again: %v", rec.ID, rec.Event.Node, err)
+		}
+	}
+	return a.flushRepliesLocked(ctx, rec)
 }
 
 func viaNote(via string) string {
@@ -605,6 +750,8 @@ var slackLink = regexp.MustCompile(`<([^|>]+)(?:\|[^>]*)?>`)
 
 // HandleInbound acts on one message from the owner.
 func (a *Agent) HandleInbound(ctx context.Context, in slackio.Inbound) {
+	a.recordMu.Lock()
+	defer a.recordMu.Unlock()
 	text := strings.TrimSpace(slackLink.ReplaceAllString(in.Text, "$1"))
 	cmd, ref, _ := strings.Cut(text, " ")
 	cmd = strings.ToLower(cmd)
@@ -624,10 +771,12 @@ func (a *Agent) HandleInbound(ctx context.Context, in slackio.Inbound) {
 			a.logf("reply: %v", err)
 		}
 	}
-	save := func(r *event.Record) {
+	save := func(r *event.Record) bool {
 		if err := a.Store.Save(r); err != nil {
 			a.logf("record %s: save failed: %v", r.ID, err)
+			return false
 		}
+		return true
 	}
 	threadTS := in.ThreadTS
 	var rec *event.Record
@@ -677,7 +826,7 @@ func (a *Agent) HandleInbound(ctx context.Context, in slackio.Inbound) {
 	switch cmd {
 	case "file":
 		if !again {
-			if rec.DCStatus == "queued" {
+			if dcPending(rec.DCStatus) {
 				reply(in.ThreadTS, fmt.Sprintf("A DC run for %s/%s is already queued; its result will appear here. Reply `file again` to queue another.", ev.Cluster, ev.Node))
 				return
 			}
@@ -686,9 +835,10 @@ func (a *Agent) HandleInbound(ctx context.Context, in slackio.Inbound) {
 				return
 			}
 		}
-		rec.DCStatus = "queued"
-		save(rec)
-		a.enqueue(dcJob{id: rec.ID, force: true})
+		if err := a.queueDC(rec, true); err != nil {
+			reply(in.ThreadTS, "Could not queue the DC request: "+err.Error())
+			return
+		}
 		reply(in.ThreadTS, fmt.Sprintf("Drafting the DC request for %s/%s now; this takes a few minutes.", ev.Cluster, ev.Node))
 	case "sent":
 		// A sent follow-up stays on the 7-day rhythm; only a fresh request earns 14 days.
@@ -701,7 +851,10 @@ func (a *Agent) HandleInbound(ctx context.Context, in slackio.Inbound) {
 			return
 		}
 		rec.DCStatus = status
-		save(rec)
+		clearPendingDCReply(rec)
+		if !save(rec) {
+			return
+		}
 		reply(in.ThreadTS, fmt.Sprintf("Noted: DC request for %s/%s sent. No new draft for this node for %d days unless you reply `file`.", ev.Cluster, ev.Node, days))
 	case "ignore":
 		if err := a.Ledger.Append(ledger.Entry{TS: a.now(), Cluster: ev.Cluster, Node: ev.Node, ID: ev.ID, Status: "ignored"}); err != nil {
@@ -709,7 +862,10 @@ func (a *Agent) HandleInbound(ctx context.Context, in slackio.Inbound) {
 			return
 		}
 		rec.DCStatus = "ignored"
-		save(rec)
+		clearPendingDCReply(rec)
+		if !save(rec) {
+			return
+		}
 		reply(in.ThreadTS, fmt.Sprintf("Noted: no DC request for %s/%s for 14 days unless you reply `file`.", ev.Cluster, ev.Node))
 	case "ack":
 		if a.DryRun {
@@ -723,8 +879,12 @@ func (a *Agent) HandleInbound(ctx context.Context, in slackio.Inbound) {
 		}
 		rec.AckedAt = a.now().UTC().Format(time.RFC3339)
 		rec.AckDecided = true
+		rec.AckInFlight = false
 		rec.AckNote = "acked on your instruction"
-		save(rec)
+		clearPendingAckReply(rec)
+		if !save(rec) {
+			return
+		}
 		reply(in.ThreadTS, fmt.Sprintf("Acked %s #%s on your instruction.", a.label(), ev.Ref))
 	case "unack":
 		if rec.AckedAt == "" {
@@ -739,8 +899,12 @@ func (a *Agent) HandleInbound(ctx context.Context, in slackio.Inbound) {
 			reply(in.ThreadTS, "Unack failed: "+err.Error())
 			return
 		}
+		rec.AckInFlight = false
 		rec.AckNote = "unacked on your instruction"
-		save(rec)
+		clearPendingAckReply(rec)
+		if !save(rec) {
+			return
+		}
 		reply(in.ThreadTS, fmt.Sprintf("Unacked %s #%s; it escalates again.", a.label(), ev.Ref))
 	case "note":
 		reply(in.ThreadTS, a.note(ev, ref))
@@ -836,7 +1000,7 @@ func (a *Agent) status(ctx context.Context) string {
 		if r.AckedAt != "" {
 			acked++
 		}
-		if r.DCStatus != "" && r.DCStatus != "queued" {
+		if r.DCStatus != "" && !dcPending(r.DCStatus) {
 			dc++
 		}
 		if r.Deferred && !r.Digested {

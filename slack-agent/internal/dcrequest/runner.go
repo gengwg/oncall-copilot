@@ -167,11 +167,11 @@ func exitFailure(stdout, stderr []byte, runErr error, timedOut bool, timeout tim
 	if runErr == nil && !timedOut {
 		return res
 	}
-	if timedOut {
-		return Result{Status: Failed, Detail: "timed out after " + timeout.String(), CostUSD: res.CostUSD}
-	}
 	if res.Status != Failed {
 		return res
+	}
+	if timedOut {
+		return Result{Status: Failed, Detail: "timed out after " + timeout.String(), CostUSD: res.CostUSD}
 	}
 	reason := strings.TrimSpace(string(stderr))
 	if reason == "" {

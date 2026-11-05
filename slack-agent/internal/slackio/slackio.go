@@ -17,6 +17,8 @@ import (
 type Poster interface {
 	PostDM(ctx context.Context, text string) (ts string, err error)
 	Reply(ctx context.Context, threadTS, text string) error
+	ReplyIdentified(ctx context.Context, threadTS, text, receiptID string) error
+	ReplyExists(ctx context.Context, threadTS, text, receiptID string) (bool, error)
 }
 
 // Inbound is one message from the owner. ThreadTS is empty for a top-level DM.
@@ -50,8 +52,49 @@ func (c *Client) PostDM(ctx context.Context, text string) (string, error) {
 }
 
 func (c *Client) Reply(ctx context.Context, threadTS, text string) error {
-	_, _, err := c.api.PostMessageContext(ctx, c.dm, slack.MsgOptionText(text, false), slack.MsgOptionTS(threadTS), slack.MsgOptionDisableLinkUnfurl())
+	return c.postReply(ctx, threadTS, text, "")
+}
+
+func (c *Client) ReplyIdentified(ctx context.Context, threadTS, text, receiptID string) error {
+	return c.postReply(ctx, threadTS, text, receiptID)
+}
+
+func (c *Client) postReply(ctx context.Context, threadTS, text, receiptID string) error {
+	options := []slack.MsgOption{slack.MsgOptionText(text, false), slack.MsgOptionTS(threadTS), slack.MsgOptionDisableLinkUnfurl()}
+	if receiptID != "" {
+		options = append(options, slack.MsgOptionMetadata(slack.SlackMetadata{
+			EventType: "oncall_copilot_reply", EventPayload: map[string]any{"receipt_id": receiptID},
+		}))
+	}
+	_, _, err := c.api.PostMessageContext(ctx, c.dm, options...)
 	return err
+}
+
+// ReplyExists reports whether this bot already posted the exact receipt in the
+// thread. The metadata ID distinguishes identical text from different DC runs.
+func (c *Client) ReplyExists(ctx context.Context, threadTS, text, receiptID string) (bool, error) {
+	cursor := ""
+	for {
+		msgs, more, next, err := c.api.GetConversationRepliesContext(ctx, &slack.GetConversationRepliesParameters{
+			ChannelID: c.dm, Timestamp: threadTS, Cursor: cursor, Limit: 1000, IncludeAllMetadata: true,
+		})
+		if err != nil {
+			return false, fmt.Errorf("slack: read thread replies: %w", err)
+		}
+		for _, msg := range msgs {
+			id, _ := msg.Metadata.EventPayload["receipt_id"].(string)
+			if msg.Timestamp != threadTS && msg.ThreadTimestamp == threadTS && msg.BotID != "" && msg.Text == text && receiptID != "" && id == receiptID {
+				return true, nil
+			}
+		}
+		if !more {
+			return false, nil
+		}
+		if next == "" || next == cursor {
+			return false, fmt.Errorf("slack: read thread replies: cursor did not advance")
+		}
+		cursor = next
+	}
 }
 
 // Listen runs the Socket Mode loop until ctx ends, calling handle for each
